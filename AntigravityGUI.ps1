@@ -9,6 +9,16 @@
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
 
+trap {
+    $errText = "Фатальная ошибка при выполнении AntigravityGUI.ps1:`r`n$($_)`r`n$($_.ScriptStackTrace)"
+    try {
+        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher\launcher_error.log" }
+        [System.IO.File]::WriteAllText($logF, $errText, [System.Text.Encoding]::UTF8)
+        [System.Windows.MessageBox]::Show($errText, "Ошибка запуска Antigravity Launcher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+    } catch {}
+    return
+}
+
 # --- Определение расположения исполняемого файла agy.exe ---
 $defaultAgyPath = "$env:LOCALAPPDATA\agy\bin\agy.exe"
 if (-not (Test-Path $defaultAgyPath)) {
