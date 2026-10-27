@@ -4642,9 +4642,9 @@ function Restore-SavedTabs {
             [void](Add-NewTab -Title $tTitle -ConversationId $tConvId -Workspace $tWs -Model $tModel -Mode $tMode -Effort $tEffort -SkipPerms $tSkipPerms -Lazy:([bool]$tConvId) -SkipSave)
         }
 
-        # Активируем сохранённую вкладку без автоматической подгрузки до клика пользователя
+        # Активируем сохранённую вкладку и автоматически подгружаем её диалог
         $targetIdx = if ($activeIdx -ge 0 -and $activeIdx -lt $global:TabsList.Count) { $activeIdx } else { 0 }
-        Switch-ToTab -Tab $global:TabsList[$targetIdx] -NoAutoLoad -SkipSave
+        Switch-ToTab -Tab $global:TabsList[$targetIdx] -SkipSave
         Save-LauncherConfig
     } else {
         # Если сохраненных вкладок нет, создаем одну начальную чистую сессию
