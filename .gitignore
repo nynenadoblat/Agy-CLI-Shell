@@ -1,0 +1,28 @@
+# Runtime user state & personal session metadata
+launcher_config.json
+launcher_config.json.bak*
+sessions_meta.json
+
+# Scratch & temporary testing files
+scratch/
+temp/
+tmp/
+*.tmp
+*.log
+*.bak
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# OS & Editor generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
