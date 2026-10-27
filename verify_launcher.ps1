@@ -1207,7 +1207,7 @@ Remove-Item -Path $testSysDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "[OK] Парсинг транскрипта со смешанными системными сообщениями, фильтрация тегов и рендеринг без сырых XML тегов подтверждены." -ForegroundColor Green
 
 # 18.4. Проверка паритета Python реализации (antigravity_gui.py)
-$pyContent = [System.IO.File]::ReadAllText("AntigravityLauncher\antigravity_gui.py", [System.Text.Encoding]::UTF8)
+$pyContent = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyContent.Contains("class CollapsibleSystemMessageCard")) {
     Write-Error "В antigravity_gui.py отсутствует класс CollapsibleSystemMessageCard!"
     exit 1
@@ -1249,7 +1249,7 @@ Remove-AntigravityConversation -conversationId $dummyConvId | Out-Null
 Write-Host "[OK] Задание пользовательского названия разговора (Set-ConversationTitle) и сохранение в sessions_meta.json валидны." -ForegroundColor Green
 
 # 19.1. Проверка наличия функционала в Python реализации (antigravity_gui.py)
-$pyContentUpdated = [System.IO.File]::ReadAllText("AntigravityLauncher\antigravity_gui.py", [System.Text.Encoding]::UTF8)
+$pyContentUpdated = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyContentUpdated.Contains("def set_conversation_title")) {
     Write-Error "В antigravity_gui.py отсутствует функция set_conversation_title!"
     exit 1
@@ -1305,7 +1305,7 @@ if (-not $txtContextTokens.Text.Contains("/")) {
 Write-Host "[OK] Парсер токенов (Get-ConversationContextStats), форматирование и отображение контекста в статус-баре валидны." -ForegroundColor Green
 
 # 20.1. Проверка наличия базового функционала контекста в Python реализации (antigravity_gui.py)
-$pyContentFinal = [System.IO.File]::ReadAllText("AntigravityLauncher\antigravity_gui.py", [System.Text.Encoding]::UTF8)
+$pyContentFinal = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyContentFinal.Contains("def get_model_context_limit")) {
     Write-Error "В antigravity_gui.py отсутствует функция get_model_context_limit!"
     exit 1

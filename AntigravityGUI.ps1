@@ -1604,6 +1604,16 @@ function Toggle-ToolGroupCard {
     if (-not $g) { return }
 
     if ($g.IsCollapsed) {
+        if ($g.LazyTools -and $g.BodyPanel.Children.Count -eq 0) {
+            foreach ($t in $g.LazyTools) {
+                $row = [System.Windows.Controls.TextBlock]::new()
+                $tSummary = if ($t.Summary) { " — $($t.Summary)" } else { "" }
+                $row.Text = "  ✔️ ⚙️ [$($t.Name)]$tSummary"
+                $row.Foreground = (Get-CachedBrush "#4EC9B0")
+                $row.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                $g.BodyPanel.Children.Add($row) | Out-Null
+            }
+        }
         $g.BodyBorder.Visibility = [System.Windows.Visibility]::Visible
         $g.ToggleHint.Text = "▼ Свернуть"
         $g.IsCollapsed = $false
@@ -1700,6 +1710,7 @@ function New-ToolGroupCard {
         TotalSeconds = 0.0
         IsCollapsed  = [bool]$StartCollapsed
         PendingItems = @{}
+        LazyTools    = $null
     }
 
     # Эффект наведения мыши на шапку и бейдж
@@ -2024,13 +2035,16 @@ function Add-HistoryToolGroupCard($toolsList, $Document = $null) {
     if (-not $toolsList -or $toolsList.Count -eq 0) { return }
     $card = New-ToolGroupCard -StartCollapsed -Document $Document
     $card.ToolCount = $toolsList.Count
-    foreach ($t in $toolsList) {
-        $row = [System.Windows.Controls.TextBlock]::new()
-        $tSummary = if ($t.Summary) { " — $($t.Summary)" } else { "" }
-        $row.Text = "  ✔️ ⚙️ [$($t.Name)]$tSummary"
-        $row.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4EC9B0")
-        $row.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
-        $card.BodyPanel.Children.Add($row) | Out-Null
+    $card.LazyTools = $toolsList
+    if ($toolsList.Count -le 3) {
+        foreach ($t in $toolsList) {
+            $row = [System.Windows.Controls.TextBlock]::new()
+            $tSummary = if ($t.Summary) { " — $($t.Summary)" } else { "" }
+            $row.Text = "  ✔️ ⚙️ [$($t.Name)]$tSummary"
+            $row.Foreground = (Get-CachedBrush "#4EC9B0")
+            $row.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+            $card.BodyPanel.Children.Add($row) | Out-Null
+        }
     }
     $card.HeaderTitle.Text = "⚙️ Вызовы инструментов ($($card.ToolCount) операций)"
     $card.ToggleHint.Text = "▶ Развернуть ($($card.ToolCount))"
@@ -2096,7 +2110,17 @@ function Save-SessionMetadata {
     } catch {}
 }
 
+$script:cachedConversations = $null
+$script:cachedConversationsTime = [DateTime]::MinValue
+$script:contextStatsCache = @{}
+
 function Get-AntigravityConversations {
+    param([switch]$ForceRefresh)
+    $now = [DateTime]::UtcNow
+    if (-not $ForceRefresh -and $script:cachedConversations -and ($now - $script:cachedConversationsTime).TotalSeconds -lt 4) {
+        return $script:cachedConversations
+    }
+
     $brainDir = "$env:USERPROFILE\.gemini\antigravity-cli\brain"
     $historyPath = "$env:USERPROFILE\.gemini\antigravity-cli\history.jsonl"
 
@@ -2145,6 +2169,7 @@ function Get-AntigravityConversations {
                 $m = $localMeta[$cid]
                 if ($m.workspace) { $workspace = $m.workspace }
                 if ($m.title)     { $title = $m.title }
+                if ($m.msgCount)  { $msgCount = [int]$m.msgCount }
             }
 
             if (-not $workspace -and $histMap.ContainsKey($cid)) {
@@ -2152,35 +2177,47 @@ function Get-AntigravityConversations {
             }
 
             if (Test-Path $tPath) {
-                try {
-                    $sr = [System.IO.StreamReader]::new($tPath, [System.Text.Encoding]::UTF8)
-                    $lineNum = 0
-                    while (-not $sr.EndOfStream) {
-                        $l = $sr.ReadLine()
-                        if ([string]::IsNullOrWhiteSpace($l)) { continue }
-                        $lineNum++
-                        if ($lineNum -eq 1 -and $title -eq "Новый диалог") {
-                            try {
-                                $first = $l | ConvertFrom-Json
-                                if ($first.content) {
-                                    $c = $first.content
-                                    if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') {
-                                        $title = $matches[1].Trim()
-                                    } else {
-                                        $title = $c.Trim()
+                $needScan = ($title -eq "Новый диалог" -or -not $workspace)
+                if ($needScan) {
+                    try {
+                        $sr = [System.IO.StreamReader]::new($tPath, [System.Text.Encoding]::UTF8)
+                        try {
+                            $lineNum = 0
+                            while (-not $sr.EndOfStream -and $lineNum -lt 15) {
+                                $l = $sr.ReadLine()
+                                if ([string]::IsNullOrWhiteSpace($l)) { continue }
+                                $lineNum++
+                                if ($lineNum -eq 1 -and $title -eq "Новый диалог") {
+                                    try {
+                                        $first = $l | ConvertFrom-Json
+                                        if ($first.content) {
+                                            $c = $first.content
+                                            if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') {
+                                                $title = $matches[1].Trim()
+                                            } else {
+                                                $title = $c.Trim()
+                                            }
+                                        }
+                                    } catch {}
+                                }
+                                if (-not $workspace) {
+                                    if ($l -match '(?i)(?<![A-Za-z0-9])([A-Za-z]:\\\\(?:[^"''\r\n\\]+\\\\)*?IGROSTROY(?:\\\\([^\r\n"''\\]+))?)') {
+                                        $workspace = $matches[1].Replace('\\', '\')
                                     }
                                 }
-                            } catch {}
-                        }
-                        if (-not $workspace -and $lineNum -lt 15) {
-                            if ($l -match '(?i)(?<![A-Za-z0-9])([A-Za-z]:\\\\(?:[^"''\r\n\\]+\\\\)*?IGROSTROY(?:\\\\([^\r\n"''\\]+))?)') {
-                                $workspace = $matches[1].Replace('\\', '\')
+                                if ($title -ne "Новый диалог" -and $workspace) { break }
                             }
+                        } finally {
+                            $sr.Dispose()
                         }
-                    }
-                    $sr.Close()
-                    $msgCount = $lineNum
-                } catch {}
+                    } catch {}
+                }
+                if ($msgCount -le 0) {
+                    try {
+                        $fi = [System.IO.FileInfo]::new($tPath)
+                        $msgCount = [math]::Max(1, [int][math]::Round($fi.Length / 4096))
+                    } catch { $msgCount = 1 }
+                }
             }
 
             $firstLineTitle = ($title -split "`r?`n")[0]
@@ -2203,7 +2240,10 @@ function Get-AntigravityConversations {
         }
     }
 
-    return $list | Sort-Object LastModified -Descending
+    $sorted = $list | Sort-Object LastModified -Descending
+    $script:cachedConversations = $sorted
+    $script:cachedConversationsTime = $now
+    return $sorted
 }
 
 function Get-ModelContextLimit {
@@ -2312,6 +2352,11 @@ function Get-ConversationContextStats {
             }
         }
 
+        $cacheKey = "$($conversationId)_$($fileInfo.LastWriteTimeUtc.Ticks)_$($modelName)"
+        if ($script:contextStatsCache -and $script:contextStatsCache.ContainsKey($cacheKey)) {
+            return $script:contextStatsCache[$cacheKey]
+        }
+
         $fs = [System.IO.FileStream]::new($transcriptPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         $lines = $null
         try {
@@ -2398,7 +2443,7 @@ function Get-ConversationContextStats {
 $(if ($pct -ge 80.0) { "`n⚠️ ВНИМАНИЕ: Контекст заполнен более чем на 80%! Рекомендуется выполнить /compact для оптимизации." } else { "" })
 "@.Trim()
 
-        return [pscustomobject]@{
+        $statObj = [pscustomobject]@{
             ConversationId = $conversationId
             TotalTokens    = $totalTokens
             InputTokens    = $inputTokens
@@ -2419,6 +2464,10 @@ $(if ($pct -ge 80.0) { "`n⚠️ ВНИМАНИЕ: Контекст заполн
             ToolTipText    = $toolTip
             Color          = $color
         }
+        if ($script:contextStatsCache -and $cacheKey) {
+            $script:contextStatsCache[$cacheKey] = $statObj
+        }
+        return $statObj
     } catch {
         return [pscustomobject]@{
             ConversationId = $conversationId
@@ -2672,33 +2721,78 @@ function Get-ConversationPreviewText {
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
     if (-not (Test-Path $tPath)) { return "История диалога пуста или файл transcript.jsonl не найден." }
 
-    $userPrompts = [System.Collections.Generic.List[string]]::new()
-    $agentResponses = [System.Collections.Generic.List[string]]::new()
+    $firstUserPrompt = ""
+    $lastUserPrompt = ""
+    $lastAgentResponse = ""
+    $userPromptsCount = 0
+    $agentResponsesCount = 0
 
     try {
-        $sr = [System.IO.StreamReader]::new($tPath, [System.Text.Encoding]::UTF8)
-        while (-not $sr.EndOfStream) {
-            $line = $sr.ReadLine()
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            try {
-                $step = $line | ConvertFrom-Json
-                if ($step.type -eq "USER_INPUT" -and $step.content) {
-                    $c = $step.content
-                    if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') { $c = $matches[1].Trim() }
-                    $userPrompts.Add($c)
+        $fileInfo = [System.IO.FileInfo]::new($tPath)
+        if ($fileInfo.Length -eq 0) { return "Диалог пуст." }
+
+        # 1. Быстрое считывание первых строк для извлечения первого запроса
+        $fsHead = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $srHead = [System.IO.StreamReader]::new($fsHead, [System.Text.Encoding]::UTF8)
+            $lineNum = 0
+            while (-not $srHead.EndOfStream -and $lineNum -lt 25) {
+                $line = $srHead.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $lineNum++
+                if ($line.Contains('"USER_INPUT"')) {
+                    try {
+                        $step = $line | ConvertFrom-Json
+                        if ($step.type -eq "USER_INPUT" -and $step.content) {
+                            $c = $step.content
+                            if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') { $c = $matches[1].Trim() }
+                            $firstUserPrompt = $c
+                            break
+                        }
+                    } catch {}
                 }
-                elseif ($step.type -eq "PLANNER_RESPONSE" -and $step.content) {
-                    $agentResponses.Add($step.content.Trim())
-                }
-            } catch {}
+            }
+        } finally {
+            $fsHead.Dispose()
         }
-        $sr.Close()
+
+        # 2. Быстрое считывание хвоста файла (последние 128 КБ) для последнего запроса и ответа
+        $fsTail = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $readSize = [Math]::Min($fileInfo.Length, 131072)
+            $fsTail.Seek(-$readSize, [System.IO.SeekOrigin]::End) | Out-Null
+            $srTail = [System.IO.StreamReader]::new($fsTail, [System.Text.Encoding]::UTF8)
+            $lines = ($srTail.ReadToEnd() -split "`r?`n")
+            for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+                $l = $lines[$i]
+                if ([string]::IsNullOrWhiteSpace($l)) { continue }
+                if (-not $lastAgentResponse -and $l.Contains('"PLANNER_RESPONSE"')) {
+                    try {
+                        $step = $l | ConvertFrom-Json
+                        if ($step.type -eq "PLANNER_RESPONSE" -and $step.content) {
+                            $lastAgentResponse = $step.content.Trim()
+                        }
+                    } catch {}
+                }
+                if (-not $lastUserPrompt -and $l.Contains('"USER_INPUT"')) {
+                    try {
+                        $step = $l | ConvertFrom-Json
+                        if ($step.type -eq "USER_INPUT" -and $step.content) {
+                            $c = $step.content
+                            if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') { $c = $matches[1].Trim() }
+                            $lastUserPrompt = $c
+                        }
+                    } catch {}
+                }
+                if ($lastAgentResponse -and $lastUserPrompt) { break }
+            }
+        } finally {
+            $fsTail.Dispose()
+        }
     } catch {}
 
     $sb = [System.Text.StringBuilder]::new()
     [void]$sb.AppendLine("ID: $conversationId")
-    [void]$sb.AppendLine("Всего запросов пользователя: $($userPrompts.Count)")
-    [void]$sb.AppendLine("Всего ответов агента: $($agentResponses.Count)")
 
     $cStats = Get-ConversationContextStats -conversationId $conversationId
     if ($cStats -and $cStats.TotalTokens -gt 0) {
@@ -2712,25 +2806,25 @@ function Get-ConversationPreviewText {
     }
     [void]$sb.AppendLine("")
 
-    if ($userPrompts.Count -gt 0) {
+    if ($firstUserPrompt) {
         [void]$sb.AppendLine("--- ПЕРВЫЙ ЗАПРОС ---")
-        $firstP = $userPrompts[0]
+        $firstP = $firstUserPrompt
         if ($firstP.Length -gt 350) { $firstP = $firstP.Substring(0, 347) + "..." }
         [void]$sb.AppendLine($firstP)
         [void]$sb.AppendLine("")
     }
 
-    if ($userPrompts.Count -gt 1) {
+    if ($lastUserPrompt -and $lastUserPrompt -ne $firstUserPrompt) {
         [void]$sb.AppendLine("--- ПОСЛЕДНИЙ ЗАПРОС ---")
-        $lastP = $userPrompts[-1]
+        $lastP = $lastUserPrompt
         if ($lastP.Length -gt 350) { $lastP = $lastP.Substring(0, 347) + "..." }
         [void]$sb.AppendLine($lastP)
         [void]$sb.AppendLine("")
     }
 
-    if ($agentResponses.Count -ge 1) {
+    if ($lastAgentResponse) {
         [void]$sb.AppendLine("--- ПОСЛЕДНИЙ ОТВЕТ АГЕНТА ---")
-        $lastA = $agentResponses[-1]
+        $lastA = $lastAgentResponse
         if ($lastA.Length -gt 600) { $lastA = $lastA.Substring(0, 597) + "..." }
         [void]$sb.AppendLine($lastA)
     }
@@ -2750,30 +2844,33 @@ function Load-ConversationTranscript {
 
     try {
         $sr = [System.IO.StreamReader]::new($tPath, [System.Text.Encoding]::UTF8)
-        while (-not $sr.EndOfStream) {
-            $line = $sr.ReadLine()
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            try {
-                $step = $line | ConvertFrom-Json
-                if ($step.type -eq "USER_INPUT") {
-                    $c = $step.content
-                    if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') {
-                        $c = $matches[1].Trim()
+        try {
+            while (-not $sr.EndOfStream) {
+                $line = $sr.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                try {
+                    $step = $line | ConvertFrom-Json
+                    if ($step.type -eq "USER_INPUT") {
+                        $c = $step.content
+                        if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') {
+                            $c = $matches[1].Trim()
+                        }
+                        $timeStr = if ($step.created_at) {
+                            try { [DateTime]::Parse($step.created_at).ToLocalTime().ToString("HH:mm:ss") } catch { "" }
+                        } else { "" }
+                        $header = if ($timeStr) { "[Вы ($timeStr)]:" } else { "[Вы]:" }
+                        [void]$sb.AppendLine("`r`n$header $c`r`n")
                     }
-                    $timeStr = if ($step.created_at) {
-                        try { [DateTime]::Parse($step.created_at).ToLocalTime().ToString("HH:mm:ss") } catch { "" }
-                    } else { "" }
-                    $header = if ($timeStr) { "[Вы ($timeStr)]:" } else { "[Вы]:" }
-                    [void]$sb.AppendLine("`r`n$header $c`r`n")
-                }
-                elseif ($step.type -eq "PLANNER_RESPONSE") {
-                    if ($step.content) {
-                        [void]$sb.AppendLine("[Antigravity]: $($step.content)`r`n")
+                    elseif ($step.type -eq "PLANNER_RESPONSE") {
+                        if ($step.content) {
+                            [void]$sb.AppendLine("[Antigravity]: $($step.content)`r`n")
+                        }
                     }
-                }
-            } catch {}
+                } catch {}
+            }
+        } finally {
+            $sr.Dispose()
         }
-        $sr.Close()
     } catch {}
 
     [void]$sb.AppendLine("`r`n--- [Вы можете продолжить этот диалог, введя сообщение ниже] ---`r`n`r`n")
@@ -2785,13 +2882,50 @@ $global:ParseTranscriptScript = {
     param([string]$path)
     if (-not (Test-Path $path)) { return @() }
 
+    function Parse-SystemMessageText([string]$text) {
+        $results = [System.Collections.Generic.List[psobject]]::new()
+        if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+        $pattern = '(?s)<SYSTEM_MESSAGE>\s*(.*?)\s*</SYSTEM_MESSAGE>'
+        $matches = [regex]::Matches($text, $pattern)
+        if ($matches.Count -gt 0) {
+            foreach ($m in $matches) {
+                $body = $m.Groups[1].Value.Trim()
+                $summary = ""
+                if ($body -match 'content=([^\r\n]+)') {
+                    $summary = $matches[1].Trim()
+                } else {
+                    $firstLine = ($body -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+                    $summary = if ($firstLine) { $firstLine.Trim() } else { "Системное уведомление" }
+                }
+                $summary = [regex]::Replace($summary, 'Task id "[0-9a-fA-F\-]{20,}/(task-\d+)"', 'Task id "$1"')
+                if ($summary.Length -gt 75) { $summary = $summary.Substring(0, 72) + "..." }
+                $results.Add([pscustomobject]@{
+                    Summary = $summary
+                    Body    = $body
+                })
+            }
+        } else {
+            $clean = $text.Trim()
+            $firstLine = ($clean -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+            $summary = if ($firstLine) { $firstLine.Trim() } else { "Системное уведомление" }
+            $summary = [regex]::Replace($summary, 'Task id "[0-9a-fA-F\-]{20,}/(task-\d+)"', 'Task id "$1"')
+            if ($summary.Length -gt 75) { $summary = $summary.Substring(0, 72) + "..." }
+            $results.Add([pscustomobject]@{
+                Summary = $summary
+                Body    = $clean
+            })
+        }
+        return , $results.ToArray()
+    }
+
     $turns = [System.Collections.Generic.List[psobject]]::new()
     $currentTurn = $null
     $activeTools = [System.Collections.Generic.List[psobject]]::new()
 
     try {
         $sr = [System.IO.StreamReader]::new($path, [System.Text.Encoding]::UTF8)
-        while (-not $sr.EndOfStream) {
+        try {
+            while (-not $sr.EndOfStream) {
             $line = $sr.ReadLine()
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             if (-not ($line.Contains('"USER_INPUT"') -or $line.Contains('"PLANNER_RESPONSE"') -or $line.Contains('"SYSTEM_MESSAGE"') -or $line.Contains('SYSTEM_MESSAGE'))) { continue }
@@ -2922,8 +3056,10 @@ $global:ParseTranscriptScript = {
                 }
             } catch {}
         }
-        $sr.Close()
-    } catch {}
+    } finally {
+        if ($sr) { $sr.Dispose() }
+    }
+} catch {}
 
     if ($currentTurn) {
         if ($activeTools.Count -gt 0) {
@@ -2940,10 +3076,21 @@ function Populate-ConversationTranscriptToLog {
     param(
         $Turns,
         [string]$conversationId,
-        $Document = $null
+        $Document = $null,
+        $Tab = $null,
+        [switch]$LoadAll
     )
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if (-not $doc) { return }
+
+    $t = if ($Tab) { $Tab } else { $global:ActiveTab }
+    if ($t -and ($t -is [psobject])) {
+        if ($t.PSObject.Properties['FullTranscriptTurns']) {
+            $t.FullTranscriptTurns = $Turns
+        } else {
+            $t | Add-Member -NotePropertyName 'FullTranscriptTurns' -NotePropertyValue $Turns -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     $doc.Blocks.Clear()
 
@@ -2958,7 +3105,54 @@ function Populate-ConversationTranscriptToLog {
     $hasMessages = $false
     if ($Turns -and $Turns.Count -gt 0) {
         $hasMessages = $true
-        foreach ($turn in $Turns) {
+        $renderTurns = $Turns
+        $earlierCount = 0
+
+        # Виртуализация: если сообщений больше 25, отображаем последние 25 и кнопку подгрузки ранних
+        if (-not $LoadAll -and $Turns.Count -gt 25) {
+            $earlierCount = $Turns.Count - 25
+            $renderTurns = $Turns | Select-Object -Last 25
+
+            $cardBorder = [System.Windows.Controls.Border]::new()
+            $cardBorder.Background = (Get-CachedBrush "#202024")
+            $cardBorder.BorderBrush = (Get-CachedBrush "#3E3E42")
+            $cardBorder.BorderThickness = [System.Windows.Thickness]::new(1)
+            $cardBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $cardBorder.Padding = [System.Windows.Thickness]::new(12, 6, 12, 6)
+            $cardBorder.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+            $cardBorder.Margin = [System.Windows.Thickness]::new(0, 4, 0, 8)
+            $cardBorder.Cursor = [System.Windows.Input.Cursors]::Hand
+
+            $sp = [System.Windows.Controls.StackPanel]::new()
+            $sp.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+            $lblIcon = [System.Windows.Controls.TextBlock]::new()
+            $lblIcon.Text = "⬆ "
+            $lblIcon.Foreground = (Get-CachedBrush "#4FC1FF")
+            $lblIcon.FontWeight = [System.Windows.FontWeights]::Bold
+            $sp.Children.Add($lblIcon) | Out-Null
+
+            $lblText = [System.Windows.Controls.TextBlock]::new()
+            $lblText.Text = "Показать более ранние сообщения (ещё $earlierCount сообщений)..."
+            $lblText.Foreground = (Get-CachedBrush "#CCCCCC")
+            $lblText.FontSize = [math]::Max(11.0, $global:CurrentFontSize - 1.0)
+            $sp.Children.Add($lblText) | Out-Null
+            $cardBorder.Child = $sp
+
+            $targetTab = $t
+            $targetDoc = $doc
+            $targetTurns = $Turns
+            $targetCid = $conversationId
+            $cardBorder.Add_PreviewMouseLeftButtonDown({
+                param($s, $e)
+                $e.Handled = $true
+                Populate-ConversationTranscriptToLog -Turns $targetTurns -conversationId $targetCid -Document $targetDoc -Tab $targetTab -LoadAll
+            }.GetNewClosure())
+
+            $uic = [System.Windows.Documents.BlockUIContainer]::new($cardBorder)
+            $doc.Blocks.Add($uic)
+        }
+
+        foreach ($turn in $renderTurns) {
             # 1. Запрос пользователя (только если не пустой): время [Вы (HH:mm:ss)], бейджи картинок [🖼️ ...], форматированный текст
             if (-not [string]::IsNullOrWhiteSpace($turn.UserText) -or -not [string]::IsNullOrWhiteSpace($turn.UserBadges)) {
                 Append-UserMessageToLog -TimeStr $turn.UserTime -Text $turn.UserText -Badges $turn.UserBadges -Document $doc
@@ -3015,17 +3209,21 @@ function Start-AsyncTranscriptLoad {
     )
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
 
-    # Отменяем предыдущую задачу загрузки на этой вкладке, если она выполнялась
+    # Неблокирующая фоновая отмена предыдущей задачи загрузки на этой вкладке
     if ($Tab.LoadingJob) {
-        try {
-            $Tab.LoadingJob.PowerShell.Stop()
-            $Tab.LoadingJob.PowerShell.Dispose()
-        } catch {}
+        $oldJob = $Tab.LoadingJob
         $Tab.LoadingJob = $null
+        [System.Threading.ThreadPool]::QueueUserWorkItem({
+            param($j)
+            try {
+                $j.PowerShell.Stop()
+                $j.PowerShell.Dispose()
+            } catch {}
+        }, $oldJob) | Out-Null
     }
 
     if (-not (Test-Path $tPath)) {
-        Populate-ConversationTranscriptToLog -Turns @() -conversationId $conversationId -Document $Tab.Document
+        Populate-ConversationTranscriptToLog -Turns @() -conversationId $conversationId -Document $Tab.Document -Tab $Tab
         $Tab.StatusText = "Диалог загружен, готов к продолжению"
         $Tab.StatusColor = "#4CAF50"
         if ($Tab.HeaderDot) { $Tab.HeaderDot.Fill = (Get-CachedBrush "#4CAF50") }
@@ -3074,7 +3272,7 @@ function Update-TabLoadingJobs {
 
             # Проверяем, что ID диалога на вкладке не сменился за время фоновой загрузки
             if ($job.ConvId -eq $t.ConversationId) {
-                Populate-ConversationTranscriptToLog -Turns $turns -conversationId $job.ConvId -Document $t.Document
+                Populate-ConversationTranscriptToLog -Turns $turns -conversationId $job.ConvId -Document $t.Document -Tab $t
 
                 $t.StatusText = "Диалог загружен, готов к продолжению"
                 $t.StatusColor = "#4CAF50"
@@ -3127,12 +3325,13 @@ function Select-ConversationItem {
     if (-not $conv -or -not $conv.Id) { return }
 
     $targetTab = $global:ActiveTab
+    $cleanTitle = if ($conv.Title) { $conv.Title } else { "Диалог $($conv.Id.Substring(0,8))" }
+    if ($cleanTitle.Length -gt 20) { $cleanTitle = $cleanTitle.Substring(0, 20) + "..." }
+
     if (-not $targetTab) {
-        $targetTab = Add-NewTab -ConversationId $conv.Id -Select
+        $targetTab = Add-NewTab -ConversationId $conv.Id -Title $cleanTitle -Select
     } else {
         $targetTab.ConversationId = $conv.Id
-        $title = if ($conv.Title) { $conv.Title } else { "Диалог $($conv.Id.Substring(0,8))" }
-        $cleanTitle = if ($title.Length -gt 20) { $title.Substring(0, 20) + "..." } else { $title }
         $targetTab.Title = $cleanTitle
         if ($targetTab.HeaderTitle) {
             $targetTab.HeaderTitle.Text = $cleanTitle
@@ -3184,11 +3383,15 @@ function Reset-ToNewChat {
     $tab = $global:ActiveTab
     if ($tab) {
         if ($tab.LoadingJob) {
-            try {
-                $tab.LoadingJob.PowerShell.Stop()
-                $tab.LoadingJob.PowerShell.Dispose()
-            } catch {}
+            $oldJob = $tab.LoadingJob
             $tab.LoadingJob = $null
+            [System.Threading.ThreadPool]::QueueUserWorkItem({
+                param($j)
+                try {
+                    $j.PowerShell.Stop()
+                    $j.PowerShell.Dispose()
+                } catch {}
+            }, $oldJob) | Out-Null
         }
         Hide-LoadingOverlay
         $tab.ConversationId = $null
@@ -3463,12 +3666,12 @@ function Refresh-ConversationsCombo {
                 }
             }
             if ($foundIdx -ge 0) {
-                $cmbConversations.SelectedIndex = $foundIdx
+                try { $cmbConversations.SelectedIndex = $foundIdx } catch {}
             } else {
-                $cmbConversations.SelectedIndex = 0
+                try { $cmbConversations.SelectedIndex = 0 } catch {}
             }
         } else {
-            $cmbConversations.SelectedIndex = 0
+            try { $cmbConversations.SelectedIndex = 0 } catch {}
         }
     } finally {
         $global:SuppressConvComboEvent = $false
@@ -3670,8 +3873,9 @@ function Show-ConversationSelectorWindow {
     }
 
     $loadList = {
+        param([switch]$Force)
         $allConvs.Clear()
-        $items = Get-AntigravityConversations
+        $items = Get-AntigravityConversations -ForceRefresh:$Force
         foreach ($it in $items) { $allConvs.Add($it) }
         $applyFilter.Invoke()
     }
@@ -3681,7 +3885,7 @@ function Show-ConversationSelectorWindow {
     })
 
     $btnRefreshList.Add_Click({
-        $loadList.Invoke()
+        & $loadList -Force
         Refresh-ConversationsCombo
     })
 
@@ -3856,6 +4060,7 @@ function New-TabSession {
         ActiveStreamParagraph = $null
         LoadingJob          = $null
         ContextStats        = $null
+        FullTranscriptTurns = $null
         IsTranscriptLoaded  = $isLoaded
     }
 
@@ -4265,6 +4470,29 @@ function Switch-ToTab {
         $txtPromptInput.Focus() | Out-Null
     }
 
+    # Синхронизируем комбобокс быстрого выбора диалогов с активной вкладкой
+    if ($cmbConversations) {
+        $global:SuppressConvComboEvent = $true
+        try {
+            $foundIdx = -1
+            if ($Tab.ConversationId) {
+                for ($i = 0; $i -lt $cmbConversations.Items.Count; $i++) {
+                    if ($cmbConversations.Items[$i].Tag -eq $Tab.ConversationId) {
+                        $foundIdx = $i
+                        break
+                    }
+                }
+            }
+            if ($foundIdx -ge 0) {
+                $cmbConversations.SelectedIndex = $foundIdx
+            } else {
+                $cmbConversations.SelectedIndex = 0
+            }
+        } finally {
+            $global:SuppressConvComboEvent = $false
+        }
+    }
+
     # Автозагрузка диалога при переключении на вкладку
     if (-not $NoAutoLoad -and -not $Tab.IsTranscriptLoaded -and $Tab.ConversationId) {
         Load-TabConversation -Tab $Tab
@@ -4275,7 +4503,7 @@ function Switch-ToTab {
     }
 }
 
-function Stop-ProcessTree([int]$processId) {
+function global:Stop-ProcessTree([int]$processId) {
     if ($processId -le 0) { return }
     try {
         & taskkill.exe /PID $processId /T /F 2>$null | Out-Null
@@ -4285,16 +4513,20 @@ function Stop-ProcessTree([int]$processId) {
     } catch {}
 }
 
-function Close-Tab {
+function global:Close-Tab {
     param([Parameter(Mandatory=$true)]$Tab)
     
-    # Если на вкладке выполнялась фоновая загрузка, освобождаем ресурсы ранспейса
+    # Неблокирующее освобождение ресурсов фоновой загрузки
     if ($Tab.LoadingJob) {
-        try {
-            $Tab.LoadingJob.PowerShell.Stop()
-            $Tab.LoadingJob.PowerShell.Dispose()
-        } catch {}
+        $oldJob = $Tab.LoadingJob
         $Tab.LoadingJob = $null
+        [System.Threading.ThreadPool]::QueueUserWorkItem({
+            param($j)
+            try {
+                $j.PowerShell.Stop()
+                $j.PowerShell.Dispose()
+            } catch {}
+        }, $oldJob) | Out-Null
     }
 
     # Если на вкладке выполняется процесс, принудительно останавливаем его дерево
@@ -4658,11 +4890,13 @@ $btnLaunchTui.Add_Click({
 # Остановка выполнения
 $btnStop.Add_Click({
     $tab = $global:ActiveTab
-    if ($tab -and $tab.SyncState.IsRunning -and $tab.SyncState.ProcessId -gt 0) {
+    if ($tab -and $tab.SyncState.IsRunning) {
         try {
-            $pidToKill = $tab.SyncState.ProcessId
             $tab.SyncState.StopRequested = $true
-            Stop-ProcessTree -processId $pidToKill
+            if ($tab.SyncState.ProcessId -gt 0) {
+                $pidToKill = $tab.SyncState.ProcessId
+                Stop-ProcessTree -processId $pidToKill
+            }
             $tab.SyncState.Queue.Enqueue([pscustomobject]@{ Type = "status"; Text = "Остановлено пользователем"; Color = "#E57373" })
             $tab.SyncState.Queue.Enqueue([pscustomobject]@{ Type = "system"; Text = "Процесс агента был принудительно остановлен." })
             $tab.SyncState.Queue.Enqueue([pscustomobject]@{ Type = "done" })
@@ -4826,6 +5060,7 @@ function Send-AgentPrompt {
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $true
 
+            if ($st.StopRequested) { return }
             $proc = New-Object System.Diagnostics.Process
             $proc.StartInfo = $psi
             $proc.Start() | Out-Null
@@ -4833,6 +5068,11 @@ function Send-AgentPrompt {
             # Асинхронный неблокирующий дренаж stderr через .NET Task (чистый BCL, без межпоточных падений PowerShell)
             $errTask = $proc.StandardError.ReadToEndAsync()
             $st.ProcessId = $proc.Id
+
+            if ($st.StopRequested) {
+                try { & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null } catch {}
+                return
+            }
 
             $turnFinished = $false
 
@@ -5095,8 +5335,24 @@ $window.Add_PreviewKeyDown({
 # Инициализация списка разговоров
 Refresh-ConversationsCombo
 
-# Сохранение конфигурации при закрытии окна
+# Сохранение конфигурации и завершение фоновых процессов при закрытии окна
 $window.Add_Closing({
+    if ($global:TabsList) {
+        foreach ($t in @($global:TabsList)) {
+            if ($t.SyncState -and $t.SyncState.IsRunning -and $t.SyncState.ProcessId -gt 0) {
+                try {
+                    $t.SyncState.StopRequested = $true
+                    Stop-ProcessTree -processId $t.SyncState.ProcessId
+                } catch {}
+            }
+            if ($t.LoadingJob) {
+                try {
+                    $t.LoadingJob.PowerShell.Stop()
+                    $t.LoadingJob.PowerShell.Dispose()
+                } catch {}
+            }
+        }
+    }
     Save-LauncherConfig
 })
 

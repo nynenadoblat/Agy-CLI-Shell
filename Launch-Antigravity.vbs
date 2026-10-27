@@ -1,3 +1,5 @@
+Set FSO = CreateObject("Scripting.FileSystemObject")
+scriptDir = FSO.GetParentFolderName(WScript.ScriptFullName)
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.CurrentDirectory = "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
-WshShell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ""C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher\AntigravityGUI.ps1""", 0, False
+WshShell.CurrentDirectory = scriptDir
+WshShell.Run "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & scriptDir & "\AntigravityGUI.ps1""", 0, False
