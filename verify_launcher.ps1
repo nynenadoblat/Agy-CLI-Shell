@@ -1582,12 +1582,8 @@ Write-Host "[OK] Восстановление нескольких вкладо�
 
 # 24. Проверка защиты от Pipe Buffer Deadlock и завершения дерева процессов
 $guiCheckCode = Get-Content -Path $guiPs1 -Raw -Encoding utf8
-if (-not $guiCheckCode.Contains('BeginErrorReadLine()')) {
-    Write-Error "В AntigravityGUI.ps1 отсутствует асинхронное чтение stderr (`$proc.BeginErrorReadLine())!"
-    exit 1
-}
-if (-not $guiCheckCode.Contains('Add_ErrorDataReceived')) {
-    Write-Error "В AntigravityGUI.ps1 отсутствует обработчик Add_ErrorDataReceived!"
+if (-not $guiCheckCode.Contains('ReadToEndAsync()')) {
+    Write-Error "В AntigravityGUI.ps1 отсутствует асинхронное чтение stderr (`$proc.StandardError.ReadToEndAsync())!"
     exit 1
 }
 if (-not $guiCheckCode.Contains('Stop-ProcessTree')) {

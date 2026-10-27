@@ -4828,18 +4828,10 @@ function Send-AgentPrompt {
 
             $proc = New-Object System.Diagnostics.Process
             $proc.StartInfo = $psi
-
-            # Потокобезопасный сборщик stderr во избежание переполнения системного буфера pipe (Deadlock)
-            $errSb = [System.Text.StringBuilder]::new()
-            $proc.Add_ErrorDataReceived({
-                param($s, $e)
-                if ($e.Data) {
-                    [void]$errSb.AppendLine($e.Data)
-                }
-            })
-
             $proc.Start() | Out-Null
-            $proc.BeginErrorReadLine()
+
+            # Асинхронный неблокирующий дренаж stderr через .NET Task (чистый BCL, без межпоточных падений PowerShell)
+            $errTask = $proc.StandardError.ReadToEndAsync()
             $st.ProcessId = $proc.Id
 
             $turnFinished = $false
@@ -4926,7 +4918,12 @@ function Send-AgentPrompt {
                 } catch {}
             }
 
-            $errOutput = $errSb.ToString().Trim()
+            $errOutput = ""
+            try {
+                if ($errTask) {
+                    $errOutput = $errTask.GetAwaiter().GetResult().Trim()
+                }
+            } catch {}
 
             if ($st.StopRequested) {
                 # Остановлено пользователем через кнопку "Стоп"
