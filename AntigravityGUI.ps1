@@ -552,7 +552,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } else {
     "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
 }
-$configFilePath = Join-Path $launcherDir "launcher_config.json"
+$configFilePath = if ($env:ANTIGRAVITY_CONFIG_PATH) { $env:ANTIGRAVITY_CONFIG_PATH } else { Join-Path $launcherDir "launcher_config.json" }
 
 # --- Коллекция прикрепленных изображений ---
 $global:AttachedImages = [System.Collections.Generic.List[psobject]]::new()
@@ -4390,6 +4390,8 @@ function Switch-ToTab {
         if (-not $NoAutoLoad -and -not $Tab.IsTranscriptLoaded -and $Tab.ConversationId) {
             Load-TabConversation -Tab $Tab
         }
+        Update-TabHeadersVisual
+        Update-ContextDisplay -conversationId $Tab.ConversationId -modelName $Tab.Model
         return
     }
 
@@ -4572,6 +4574,7 @@ function Add-NewTab {
         [bool]$SkipPerms = $true,
         [switch]$Lazy,
         [switch]$Select,
+        [switch]$SkipSelect,
         [switch]$SkipSave
     )
     $tabNum = $global:TabsCounter + 1
@@ -4590,7 +4593,7 @@ function Add-NewTab {
     }
     $global:TabsList.Add($tab)
 
-    if ($Select -or $global:TabsList.Count -eq 1) {
+    if (-not $SkipSelect -and ($Select -or $global:TabsList.Count -eq 1)) {
         Switch-ToTab -Tab $tab -NoAutoLoad:$Lazy -SkipSave:$SkipSave
     }
 
@@ -4639,7 +4642,7 @@ function Restore-SavedTabs {
             $tSkipPerms = if ($null -ne $st.skipPerms) { [bool]$st.skipPerms } else { $true }
 
             # Восстанавливаем вкладку с отложенной загрузкой (Lazy), если привязан ID диалога
-            [void](Add-NewTab -Title $tTitle -ConversationId $tConvId -Workspace $tWs -Model $tModel -Mode $tMode -Effort $tEffort -SkipPerms $tSkipPerms -Lazy:([bool]$tConvId) -SkipSave)
+            [void](Add-NewTab -Title $tTitle -ConversationId $tConvId -Workspace $tWs -Model $tModel -Mode $tMode -Effort $tEffort -SkipPerms $tSkipPerms -Lazy:([bool]$tConvId) -SkipSelect -SkipSave)
         }
 
         # Активируем сохранённую вкладку и автоматически подгружаем её диалог

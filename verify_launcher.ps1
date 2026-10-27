@@ -4,17 +4,10 @@
 #>
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$cfgBackupPath = Join-Path $PSScriptRoot "launcher_config.json"
-$cfgBackupData = $null
-if (Test-Path $cfgBackupPath) {
-    try { $cfgBackupData = [System.IO.File]::ReadAllText($cfgBackupPath, [System.Text.Encoding]::UTF8) } catch {}
-}
-function Restore-LauncherConfigBackup {
-    if ($cfgBackupData -and (Test-Path (Split-Path $cfgBackupPath))) {
-        try {
-            [System.IO.File]::WriteAllText($cfgBackupPath, $cfgBackupData, [System.Text.Encoding]::UTF8)
-        } catch {}
-    }
+$testCfgPath = Join-Path $PSScriptRoot "scratch\test_launcher_config.json"
+$env:ANTIGRAVITY_CONFIG_PATH = $testCfgPath
+if (Test-Path $testCfgPath) {
+    Remove-Item $testCfgPath -Force -ErrorAction SilentlyContinue
 }
 
 try {
@@ -40,9 +33,9 @@ Write-Host "[OK] Синтаксис AntigravityGUI.ps1 валиден (0 оши�
 # 2. Проверка работы основных функций без отображения UI
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 
-# Временно изолируем конфигурацию для чистого запуска тестов с 1 вкладкой по умолчанию
-if (Test-Path $cfgBackupPath) {
-    Remove-Item $cfgBackupPath -Force -ErrorAction SilentlyContinue
+# Изолированная тестовая конфигурация для чистого запуска тестов с 1 вкладкой по умолчанию
+if (Test-Path $testCfgPath) {
+    Remove-Item $testCfgPath -Force -ErrorAction SilentlyContinue
 }
 
 $scriptContent = Get-Content -Path $guiPs1 -Raw -Encoding utf8
@@ -87,7 +80,7 @@ Write-Host "[OK] Сброс сессии на новый диалог работ
 
 # 3. Проверка персистентности настроек шрифта
 Set-AppZoom 3.0
-$cfgPath = Join-Path $PSScriptRoot "launcher_config.json"
+$cfgPath = $testCfgPath
 if (-not (Test-Path $cfgPath)) {
     Write-Error "Файл launcher_config.json не был создан при масштабировании!"
     exit 1
@@ -1610,5 +1603,7 @@ Write-Host "[OK] Защита от переполнения буфера pipe (B
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0
 } finally {
-    Restore-LauncherConfigBackup
+    if (Test-Path $testCfgPath) {
+        Remove-Item $testCfgPath -Force -ErrorAction SilentlyContinue
+    }
 }
