@@ -489,6 +489,18 @@ if (-not (Test-Path $defaultWorkspace)) {
 $reader = [System.Xml.XmlNodeReader]::new($xaml)
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
+# --- Глобальная защита от вылетов в событиях UI WPF (Dispatcher Unhandled Exception) ---
+$window.Dispatcher.Add_UnhandledException({
+    param($s, $e)
+    try {
+        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher\launcher_error.log" }
+        $errText = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Dispatcher UI Exception: $($e.Exception.Message)`r`n$($e.Exception.StackTrace)`r`n"
+        [System.IO.File]::AppendAllText($logF, $errText, [System.Text.Encoding]::UTF8)
+    } catch {}
+    # Помечаем исключение как обработанное, чтобы окно интерфейса не вылетало
+    $e.Handled = $true
+})
+
 # --- Определение расположения папки лаунчера ---
 $launcherDir = if ($PSScriptRoot) {
     $PSScriptRoot
@@ -653,10 +665,13 @@ function Render-AttachmentsUI {
         $btnRemove.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
         $btnRemove.Padding = [System.Windows.Thickness]::new(4, 2, 4, 2)
         $btnRemove.ToolTip = "Удалить это изображение"
+        $targetItem = $item
         $btnRemove.Add_Click({
-            $global:AttachedImages.Remove($capturedItem) | Out-Null
+            if ($targetItem) {
+                $global:AttachedImages.Remove($targetItem) | Out-Null
+            }
             Render-AttachmentsUI
-        })
+        }.GetNewClosure())
 
         [void]$cardGrid.Children.Add($btnRemove)
         $card.Child = $cardGrid
@@ -1723,20 +1738,28 @@ function New-ToolGroupCard {
         LazyTools    = $null
     }
 
-    # Эффект наведения мыши на шапку и бейдж
+    # Эффект наведения мыши на шапку и бейдж (используем $s - отправитель события WPF, чтобы не зависеть от замыкания переменных)
     $headerBtn.Add_MouseEnter({
-        $headerBtn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#333338")
+        param($s, $e)
+        if ($s) { $s.Background = (Get-CachedBrush "#333338") }
     })
     $headerBtn.Add_MouseLeave({
-        $headerBtn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D2D30")
+        param($s, $e)
+        if ($s) { $s.Background = (Get-CachedBrush "#2D2D30") }
     })
     $toggleBadge.Add_MouseEnter({
-        $toggleBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4A4A52")
-        $toggleBadge.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#6E6E78")
+        param($s, $e)
+        if ($s) {
+            $s.Background = (Get-CachedBrush "#4A4A52")
+            $s.BorderBrush = (Get-CachedBrush "#6E6E78")
+        }
     })
     $toggleBadge.Add_MouseLeave({
-        $toggleBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#38383C")
-        $toggleBadge.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4E4E52")
+        param($s, $e)
+        if ($s) {
+            $s.Background = (Get-CachedBrush "#38383C")
+            $s.BorderBrush = (Get-CachedBrush "#4E4E52")
+        }
     })
 
     # Сохраняем ссылку на объект группы в Tag для доступа из обработчиков событий
@@ -1910,20 +1933,28 @@ function New-SystemMessageCard {
         IsCollapsed = [bool]$StartCollapsed
     }
 
-    # Эффекты при наведении
+    # Эффекты при наведении (используем $s - отправитель события WPF, чтобы не зависеть от замыкания переменных)
     $headerBtn.Add_MouseEnter({
-        $headerBtn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#282E37")
+        param($s, $e)
+        if ($s) { $s.Background = (Get-CachedBrush "#282E37") }
     })
     $headerBtn.Add_MouseLeave({
-        $headerBtn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+        param($s, $e)
+        if ($s) { $s.Background = (Get-CachedBrush "#21262D") }
     })
     $toggleBadge.Add_MouseEnter({
-        $toggleBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#3C444D")
-        $toggleBadge.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#58A6FF")
+        param($s, $e)
+        if ($s) {
+            $s.Background = (Get-CachedBrush "#3C444D")
+            $s.BorderBrush = (Get-CachedBrush "#58A6FF")
+        }
     })
     $toggleBadge.Add_MouseLeave({
-        $toggleBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
-        $toggleBadge.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#484F58")
+        param($s, $e)
+        if ($s) {
+            $s.Background = (Get-CachedBrush "#30363D")
+            $s.BorderBrush = (Get-CachedBrush "#484F58")
+        }
     })
 
     $headerBtn.Tag = $groupObj
@@ -4249,13 +4280,15 @@ function Create-TabHeaderUI($tab) {
     $headerBorder.Tag = $targetTab
 
     $closeBtn.Add_MouseEnter({
-        $closeBtn.Background = (Get-CachedBrush "#C53030")
-        $closeTxt.Foreground = [System.Windows.Media.Brushes]::White
-    })
+        param($s, $e)
+        if ($s) { $s.Background = (Get-CachedBrush "#C53030") }
+        if ($closeTxt) { $closeTxt.Foreground = [System.Windows.Media.Brushes]::White }
+    }.GetNewClosure())
     $closeBtn.Add_MouseLeave({
-        $closeBtn.Background = [System.Windows.Media.Brushes]::Transparent
-        $closeTxt.Foreground = (Get-CachedBrush "#888888")
-    })
+        param($s, $e)
+        if ($s) { $s.Background = [System.Windows.Media.Brushes]::Transparent }
+        if ($closeTxt) { $closeTxt.Foreground = (Get-CachedBrush "#888888") }
+    }.GetNewClosure())
     $onCloseClick = {
         param($s, $e)
         $e.Handled = $true
