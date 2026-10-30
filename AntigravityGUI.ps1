@@ -97,6 +97,15 @@ if (-not (Test-Path $defaultWorkspace)) {
             </Border>
         </ControlTemplate>
 
+        <!-- Шаблон графической полосы прогресса лимитов использования -->
+        <ControlTemplate x:Key="LimitsProgressBarTemplate" TargetType="ProgressBar">
+            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                <Grid x:Name="PART_Track" ClipToBounds="True">
+                    <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="3.5"/>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+
         <!-- Полный тёмный стиль ComboBox: единый контрастный тёмный фон для закрытого и открытого состояния -->
         <Style TargetType="{x:Type ComboBox}">
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
@@ -453,29 +462,56 @@ if (-not (Test-Path $defaultWorkspace)) {
 
                 <Ellipse x:Name="StatusDot" Grid.Column="0" Width="10" Height="10" Fill="#4CAF50" Margin="0,0,8,0" VerticalAlignment="Center"/>
                 <TextBlock x:Name="TxtStatus" Grid.Column="1" Text="Готов к работе" VerticalAlignment="Center" Foreground="#AAAAAA"/>
-                <!-- ГРАФИЧЕСКИЙ ВИДЖЕТ ЗАПОЛНЕННОСТИ КОНТЕКСТА -->
-                <Border x:Name="BorderContextWidget" Grid.Column="2"
-                        Background="#1C1F26" BorderBrush="#2D333B" BorderThickness="1"
-                        CornerRadius="5" Padding="7,3" Cursor="Hand" VerticalAlignment="Center"
-                        ToolTip="Заполненность контекстного окна модели. Нажмите для подробного анализа.">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="🧠" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                        
-                        <!-- Графическая полоса прогресса (Progress Bar) -->
-                        <ProgressBar x:Name="PrgContext" Template="{StaticResource ContextProgressBarTemplate}"
-                                     Width="80" Height="8" Minimum="0" Maximum="100" Value="0"
-                                     Background="#14161C" BorderBrush="#252A34" BorderThickness="1"
-                                     Foreground="#4EC9B0" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                <!-- ГРАФИЧЕСКИЕ ВИДЖЕТЫ: КОНТЕКСТ И ЛИМИТЫ ИСПОЛЬЗОВАНИЯ -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- ГРАФИЧЕСКИЙ ВИДЖЕТ ЗАПОЛНЕННОСТИ КОНТЕКСТА -->
+                    <Border x:Name="BorderContextWidget"
+                            Background="#1C1F26" BorderBrush="#2D333B" BorderThickness="1"
+                            CornerRadius="5" Padding="7,3" Cursor="Hand" VerticalAlignment="Center" Margin="0,0,8,0"
+                            ToolTip="Заполненность контекстного окна модели. Нажмите для подробного анализа.">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="🧠" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            
+                            <!-- Графическая полоса прогресса (Progress Bar) -->
+                            <ProgressBar x:Name="PrgContext" Template="{StaticResource ContextProgressBarTemplate}"
+                                         Width="75" Height="8" Minimum="0" Maximum="100" Value="0"
+                                         Background="#14161C" BorderBrush="#252A34" BorderThickness="1"
+                                         Foreground="#4EC9B0" Margin="0,0,6,0" VerticalAlignment="Center"/>
 
-                        <!-- Числовой текст: 108k / 1.0M -->
-                        <TextBlock x:Name="TxtContextTokens" Text="0 / 1.0M" FontSize="11" Foreground="#CCCCCC" FontFamily="Consolas, Segoe UI" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <!-- Числовой текст: 108k / 1.0M -->
+                            <TextBlock x:Name="TxtContextTokens" Text="0 / 1.0M" FontSize="11" Foreground="#CCCCCC" FontFamily="Consolas, Segoe UI" Margin="0,0,6,0" VerticalAlignment="Center"/>
 
-                        <!-- Графический бейдж с процентом -->
-                        <Border x:Name="BorderContextBadge" Background="#1B2F2B" BorderBrush="#244B3F" BorderThickness="1" CornerRadius="3" Padding="4,0" VerticalAlignment="Center">
-                            <TextBlock x:Name="TxtContextPercent" Text="0%" FontSize="10" FontWeight="Bold" Foreground="#4EC9B0"/>
-                        </Border>
-                    </StackPanel>
-                </Border>
+                            <!-- Графический бейдж с процентом -->
+                            <Border x:Name="BorderContextBadge" Background="#1B2F2B" BorderBrush="#244B3F" BorderThickness="1" CornerRadius="3" Padding="4,0" VerticalAlignment="Center">
+                                <TextBlock x:Name="TxtContextPercent" Text="0%" FontSize="10" FontWeight="Bold" Foreground="#4EC9B0"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ГРАФИЧЕСКИЙ ВИДЖЕТ ЛИМИТОВ ИСПОЛЬЗОВАНИЯ -->
+                    <Border x:Name="BorderLimitsWidget"
+                            Background="#1C1F26" BorderBrush="#2D333B" BorderThickness="1"
+                            CornerRadius="5" Padding="7,3" Cursor="Hand" VerticalAlignment="Center"
+                            ToolTip="Суточные лимиты использования (RPD, RPM, квоты токенов). Нажмите для дашборда квот.">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="⚡" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            
+                            <!-- Графическая полоса прогресса лимитов -->
+                            <ProgressBar x:Name="PrgLimits" Template="{StaticResource LimitsProgressBarTemplate}"
+                                         Width="70" Height="8" Minimum="0" Maximum="100" Value="0"
+                                         Background="#14161C" BorderBrush="#252A34" BorderThickness="1"
+                                         Foreground="#4EC9B0" Margin="0,0,6,0" VerticalAlignment="Center"/>
+
+                            <!-- Числовой текст: 23 / 1.5k -->
+                            <TextBlock x:Name="TxtLimitsSummary" Text="0 / 1.5k" FontSize="11" Foreground="#CCCCCC" FontFamily="Consolas, Segoe UI" Margin="0,0,6,0" VerticalAlignment="Center"/>
+
+                            <!-- Графический бейдж с остатком квоты -->
+                            <Border x:Name="BorderLimitsBadge" Background="#1B2F2B" BorderBrush="#244B3F" BorderThickness="1" CornerRadius="3" Padding="4,0" VerticalAlignment="Center">
+                                <TextBlock x:Name="TxtLimitsPercent" Text="100%" FontSize="10" FontWeight="Bold" Foreground="#4EC9B0"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
                 <TextBlock x:Name="TxtZoom" Grid.Column="4" Text="🔍 100% (13pt)" ToolTip="Масштаб шрифта: зажмите Ctrl + колесико мыши (или Ctrl+0 / клик для сброса)" VerticalAlignment="Center" Foreground="#888888" Cursor="Hand"/>
                 <TextBlock x:Name="TxtConversationId" Grid.Column="6" Text="Диалог: Новый" VerticalAlignment="Center" Foreground="#888888" Cursor="Hand" ToolTip="Нажмите, чтобы открыть менеджер разговоров"/>
                 <Button x:Name="BtnClearLog" Grid.Column="8" Content="Очистить лог" Padding="8,2" FontSize="11" Background="#252526" BorderBrush="#3E3E42"/>
@@ -502,9 +538,9 @@ $window.Dispatcher.Add_UnhandledException({
 })
 
 # --- Определение расположения папки лаунчера ---
-$launcherDir = if ($PSScriptRoot) {
+$launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "AntigravityGUI.ps1"))) {
     $PSScriptRoot
-} elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+} elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
     "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
@@ -545,6 +581,11 @@ $prgContext             = $window.FindName("PrgContext")
 $txtContextTokens       = $window.FindName("TxtContextTokens")
 $borderContextBadge     = $window.FindName("BorderContextBadge")
 $txtContextPercent      = $window.FindName("TxtContextPercent")
+$borderLimitsWidget     = $window.FindName("BorderLimitsWidget")
+$prgLimits              = $window.FindName("PrgLimits")
+$txtLimitsSummary       = $window.FindName("TxtLimitsSummary")
+$borderLimitsBadge      = $window.FindName("BorderLimitsBadge")
+$txtLimitsPercent       = $window.FindName("TxtLimitsPercent")
 $txtZoom                = $window.FindName("TxtZoom")
 $txtConversationId      = $window.FindName("TxtConversationId")
 $btnClearLog            = $window.FindName("BtnClearLog")
@@ -2103,9 +2144,9 @@ function Show-WelcomeMessage($Document = $null) {
 Show-WelcomeMessage
 
 # --- Управление сессиями и историей разговоров ---
-$launcherDir = if ($PSScriptRoot) {
+$launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "AntigravityGUI.ps1"))) {
     $PSScriptRoot
-} elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+} elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
     "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
@@ -2757,6 +2798,518 @@ function Show-ContextDetailsDialog {
     }
 }
 
+function Get-ModelQuotaLimits {
+    param([string]$modelName = "gemini-3.8-flash-high")
+    $m = if ($modelName) { $modelName.ToLowerInvariant() } else { "" }
+    if ($m.Contains("gemini")) {
+        return [pscustomobject]@{
+            ModelName    = $modelName
+            DisplayName  = "Gemini 3.8 Flash"
+            MaxRpd       = 1500
+            MaxRpm       = 60
+            MaxTpm       = 4000000
+            MaxContext   = 1000000
+        }
+    }
+    if ($m.Contains("opus")) {
+        return [pscustomobject]@{
+            ModelName    = $modelName
+            DisplayName  = "Claude 3.5 Opus"
+            MaxRpd       = 500
+            MaxRpm       = 20
+            MaxTpm       = 500000
+            MaxContext   = 200000
+        }
+    }
+    if ($m.Contains("claude") -or $m.Contains("sonnet")) {
+        return [pscustomobject]@{
+            ModelName    = $modelName
+            DisplayName  = "Claude 3.7 Sonnet"
+            MaxRpd       = 1000
+            MaxRpm       = 50
+            MaxTpm       = 1000000
+            MaxContext   = 200000
+        }
+    }
+    if ($m.Contains("gpt-oss") -or $m.Contains("gpt")) {
+        return [pscustomobject]@{
+            ModelName    = $modelName
+            DisplayName  = "GPT-OSS 120B"
+            MaxRpd       = 800
+            MaxRpm       = 30
+            MaxTpm       = 800000
+            MaxContext   = 128000
+        }
+    }
+    return [pscustomobject]@{
+        ModelName    = $modelName
+        DisplayName  = "Gemini 3.8 Flash"
+        MaxRpd       = 1500
+        MaxRpm       = 60
+        MaxTpm       = 4000000
+        MaxContext   = 1000000
+    }
+}
+
+$global:DailyUsageCache = $null
+$global:DailyUsageCacheTime = [DateTime]::MinValue
+$global:SessionRequestsDelta = 0
+
+function Get-DailyUsageStats {
+    param(
+        [string]$modelName = "gemini-3.8-flash-high",
+        [switch]$ForceRefresh
+    )
+    $quota = Get-ModelQuotaLimits -modelName $modelName
+    $now = [DateTime]::Now
+
+    if (-not $ForceRefresh -and $global:DailyUsageCache -and (($now - $global:DailyUsageCacheTime).TotalSeconds -lt 60)) {
+        $c = $global:DailyUsageCache
+        $reqs = $c.BaseRequestsToday + $global:SessionRequestsDelta
+        $rpdPct = if ($quota.MaxRpd -gt 0) { [math]::Round(($reqs / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
+        $remRpd = [math]::Max(0, ($quota.MaxRpd - $reqs))
+        $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
+
+        $color = if ($rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
+        $badgeBg = if ($rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
+        $badgeBorder = if ($rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
+
+        return [pscustomobject]@{
+            ModelName        = $modelName
+            DisplayName      = $quota.DisplayName
+            MaxRpd           = $quota.MaxRpd
+            MaxRpm           = $quota.MaxRpm
+            MaxTpm           = $quota.MaxTpm
+            RequestsToday    = $reqs
+            RpdPercent       = $rpdPct
+            RpdRemaining     = $remRpd
+            FreePercent      = $freePct
+            TokensTodayIn    = $c.TokensTodayIn
+            TokensTodayOut   = $c.TokensTodayOut
+            TokensTodayCache = $c.TokensTodayCache
+            TokensTotal      = ($c.TokensTodayIn + $c.TokensTodayOut)
+            RecentRpm        = $c.RecentRpm
+            ResetCountdown   = $c.ResetCountdown
+            FormattedMaxRpd  = (Format-TokenCount $quota.MaxRpd)
+            Color            = $color
+            BadgeBg          = $badgeBg
+            BadgeBorder      = $badgeBorder
+            OverallStatus    = if ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
+            ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $reqs / $($quota.MaxRpd) ($rpdPct%)`n• Свободно квоты: $remRpd запр. ($freePct%)`n• Токенов сегодня: $(Format-TokenCount ($c.TokensTodayIn + $c.TokensTodayOut)) (Вход: $(Format-TokenCount $c.TokensTodayIn), Выход: $(Format-TokenCount $c.TokensTodayOut))`n• Кэшировано: $(Format-TokenCount $c.TokensTodayCache) токенов (экономия ~90%)`n• Скорость: $($c.RecentRpm) RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $($c.ResetCountdown) (00:00 UTC)`nНажмите для открытия подробного дашборда квот."
+        }
+    }
+
+    $brainDir = "$env:USERPROFILE\.gemini\antigravity-cli\brain"
+    $today = [DateTime]::Today
+    $baseReqs = 0
+    $inTokens = 0L
+    $outTokens = 0L
+    $cachedTokens = 0L
+    $recentReqs = 0
+
+    if (Test-Path $brainDir) {
+        $folders = Get-ChildItem -Path $brainDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime.Date -ge $today }
+        foreach ($f in $folders) {
+            $tPath = Join-Path $f.FullName ".system_generated\logs\transcript.jsonl"
+            if (Test-Path $tPath) {
+                $lines = Get-Content -Path $tPath -Encoding utf8 -ErrorAction SilentlyContinue
+                if ($lines) {
+                    foreach ($line in $lines) {
+                        if ($line -match '"type":\s*"USER_INPUT"') {
+                            $baseReqs++
+                        }
+                        if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
+                            try {
+                                $obj = $line | ConvertFrom-Json
+                                if ($obj.input_tokens) { $inTokens += [long]$obj.input_tokens }
+                                if ($obj.output_tokens) { $outTokens += [long]$obj.output_tokens }
+                                if ($obj.cache_read_tokens) { $cachedTokens += [long]$obj.cache_read_tokens }
+                                if ($obj.created_at) {
+                                    $dt = [DateTime]::Parse($obj.created_at).ToLocalTime()
+                                    if (($now - $dt).TotalMinutes -le 5) {
+                                        $recentReqs++
+                                    }
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    $rpmVelocity = [math]::Max(1, [int][math]::Ceiling($recentReqs / 5.0))
+    $nowUtc = [DateTime]::UtcNow
+    $nextUtc = $nowUtc.Date.AddDays(1)
+    $diff = $nextUtc - $nowUtc
+    $hours = [int][math]::Floor($diff.TotalHours)
+    $mins = $diff.Minutes
+    $countdown = "{0}ч {1}м" -f $hours, $mins
+
+    $global:DailyUsageCache = [pscustomobject]@{
+        BaseRequestsToday = $baseReqs
+        TokensTodayIn     = $inTokens
+        TokensTodayOut    = $outTokens
+        TokensTodayCache  = $cachedTokens
+        RecentRpm         = $rpmVelocity
+        ResetCountdown    = $countdown
+    }
+    $global:DailyUsageCacheTime = $now
+
+    $totalReqs = $baseReqs + $global:SessionRequestsDelta
+    $rpdPct = if ($quota.MaxRpd -gt 0) { [math]::Round(($totalReqs / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
+    $remRpd = [math]::Max(0, ($quota.MaxRpd - $totalReqs))
+    $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
+
+    $color = if ($rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
+    $badgeBg = if ($rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
+    $badgeBorder = if ($rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
+
+    return [pscustomobject]@{
+        ModelName        = $modelName
+        DisplayName      = $quota.DisplayName
+        MaxRpd           = $quota.MaxRpd
+        MaxRpm           = $quota.MaxRpm
+        MaxTpm           = $quota.MaxTpm
+        RequestsToday    = $totalReqs
+        RpdPercent       = $rpdPct
+        RpdRemaining     = $remRpd
+        FreePercent      = $freePct
+        TokensTodayIn    = $inTokens
+        TokensTodayOut   = $outTokens
+        TokensTodayCache = $cachedTokens
+        TokensTotal      = ($inTokens + $outTokens)
+        RecentRpm        = $rpmVelocity
+        ResetCountdown   = $countdown
+        FormattedMaxRpd  = (Format-TokenCount $quota.MaxRpd)
+        Color            = $color
+        BadgeBg          = $badgeBg
+        BadgeBorder      = $badgeBorder
+        OverallStatus    = if ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
+        ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $totalReqs / $($quota.MaxRpd) ($rpdPct%)`n• Свободно квоты: $remRpd запр. ($freePct%)`n• Токенов сегодня: $(Format-TokenCount ($inTokens + $outTokens)) (Вход: $(Format-TokenCount $inTokens), Выход: $(Format-TokenCount $outTokens))`n• Кэшировано: $(Format-TokenCount $cachedTokens) токенов (экономия ~90%)`n• Скорость: $rpmVelocity RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $countdown (00:00 UTC)`nНажмите для открытия подробного дашборда квот."
+    }
+}
+
+function Update-LimitsDisplay {
+    param(
+        [string]$modelName = $null
+    )
+    if (-not $txtLimitsSummary -and -not $prgLimits) { return }
+
+    if (-not $modelName -and $cmbModel -and $cmbModel.SelectedItem) {
+        $modelName = $cmbModel.SelectedItem.ToString()
+    }
+    if (-not $modelName) { $modelName = "gemini-3.8-flash-high" }
+
+    $stats = Get-DailyUsageStats -modelName $modelName
+
+    # 1. Полоса прогресса лимитов
+    if ($prgLimits) {
+        $prgLimits.Value = [math]::Min(100.0, [math]::Max(0.0, [double]$stats.RpdPercent))
+        $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
+    }
+
+    # 2. Счетчик запросов
+    if ($txtLimitsSummary) {
+        $txtLimitsSummary.Text = "$($stats.RequestsToday) / $($stats.FormattedMaxRpd)"
+    }
+
+    # 3. Бейдж процента свободного остатка
+    if ($txtLimitsPercent) {
+        $txtLimitsPercent.Text = "$($stats.FreePercent)%"
+        $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
+    }
+    if ($borderLimitsBadge) {
+        $borderLimitsBadge.Background = (Get-CachedBrush $stats.BadgeBg)
+        $borderLimitsBadge.BorderBrush = (Get-CachedBrush $stats.BadgeBorder)
+    }
+
+    # 4. Тултип
+    if ($borderLimitsWidget) {
+        $borderLimitsWidget.ToolTip = $stats.ToolTipText
+    }
+}
+
+function Show-UsageLimitsDialog {
+    param(
+        $OwnerWindow = $null
+    )
+    $activeModel = if ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-3.8-flash-high" }
+    $stats = Get-DailyUsageStats -modelName $activeModel -ForceRefresh
+
+    $dialogXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="⚡ Лимиты использования и квоты API"
+        Height="620" Width="660"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Background="#181A20" Foreground="#F1F1F1"
+        FontFamily="Segoe UI" FontSize="13">
+    <Window.Resources>
+        <ControlTemplate x:Key="DlgLimitsProgressBarTemplate" TargetType="ProgressBar">
+            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5">
+                <Grid x:Name="PART_Track" ClipToBounds="True">
+                    <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="4.5"/>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+    </Window.Resources>
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Шапка -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,16">
+            <StackPanel DockPanel.Dock="Left">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="⚡" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Лимиты использования и квоты API" FontSize="17" FontWeight="Bold" Foreground="#FFFFFF" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock x:Name="TxtDlgSubtitle" Text="Модель: $($stats.DisplayName) • Тариф: Antigravity Developer Pro" FontSize="12" Foreground="#8B949E" Margin="24,2,0,0"/>
+            </StackPanel>
+            <Border x:Name="BorderOverallStatus" DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
+                    Background="$($stats.BadgeBg)" BorderBrush="$($stats.BadgeBorder)" BorderThickness="1.5" CornerRadius="6" Padding="10,5">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="DotOverallStatus" Width="8" Height="8" Fill="$($stats.Color)" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="TxtOverallStatus" Text="$($stats.OverallStatus)" FontSize="12" FontWeight="Bold" Foreground="$($stats.Color)"/>
+                </StackPanel>
+            </Border>
+        </DockPanel>
+
+        <!-- Графические шкалы лимитов (3 карточки) -->
+        <Border Grid.Row="1" Background="#1C212B" BorderBrush="#2D3545" BorderThickness="1" CornerRadius="8" Padding="14,12" Margin="0,0,0,14">
+            <StackPanel>
+                <!-- 1. Суточный лимит запросов RPD -->
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock Text="⚡ Суточные запросы (RPD):" FontSize="12" FontWeight="SemiBold" Foreground="#E2C08D"/>
+                    <TextBlock x:Name="TxtRpdValues" Text="$($stats.RequestsToday) / $($stats.MaxRpd) ($($stats.RpdPercent)%)" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Right"/>
+                </DockPanel>
+                <ProgressBar x:Name="PrgRpd" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$($stats.RpdPercent)"
+                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
+                             Foreground="$($stats.Color)" Margin="0,0,0,4"/>
+                <DockPanel Margin="0,0,0,12">
+                    <TextBlock Text="0 запр." FontSize="10" Foreground="#666666"/>
+                    <TextBlock x:Name="TxtRpdRemaining" Text="Свободно: $($stats.RpdRemaining) запрос(ов) • $($stats.FreePercent)% квоты доступно" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
+                    <TextBlock Text="$($stats.MaxRpd) max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
+                </DockPanel>
+
+                <!-- 2. Суточный трафик токенов -->
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock Text="📊 Суммарный объем токенов сегодня:" FontSize="12" FontWeight="SemiBold" Foreground="#58A6FF"/>
+                    <TextBlock x:Name="TxtTokensTodayValues" Text="$(Format-TokenCount $stats.TokensTotal) токенов" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Right"/>
+                </DockPanel>
+                <ProgressBar x:Name="PrgTokens" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$([math]::Min(100.0, [math]::Round(($stats.TokensTotal / 50000000.0) * 100.0, 1)))"
+                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
+                             Foreground="#58A6FF" Margin="0,0,0,4"/>
+                <DockPanel Margin="0,0,0,12">
+                    <TextBlock x:Name="TxtTokenBreakdown" Text="📥 Вход: $(Format-TokenCount $stats.TokensTodayIn)  •  📤 Ответ: $(Format-TokenCount $stats.TokensTodayOut)  •  💾 Кэш: $(Format-TokenCount $stats.TokensTodayCache)" FontSize="10.5" Foreground="#8B949E"/>
+                    <TextBlock Text="Пул активен" FontSize="10" Foreground="#4EC9B0" HorizontalAlignment="Right"/>
+                </DockPanel>
+
+                <!-- 3. Частота запросов RPM -->
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock Text="⏱️ Скорость и частота запросов (RPM):" FontSize="12" FontWeight="SemiBold" Foreground="#BC8CFF"/>
+                    <TextBlock x:Name="TxtRpmValues" Text="Текущий темп: $($stats.RecentRpm) RPM  (Лимит: $($stats.MaxRpm) RPM)" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Right"/>
+                </DockPanel>
+                <ProgressBar x:Name="PrgRpm" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$([math]::Min(100.0, [math]::Round(($stats.RecentRpm / [double]$stats.MaxRpm) * 100.0, 1)))"
+                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
+                             Foreground="#3FB950" Margin="0,0,0,4"/>
+                <DockPanel>
+                    <TextBlock Text="0 RPM" FontSize="10" Foreground="#666666"/>
+                    <TextBlock Text="Оптимальная частота • Задержки и троттлинг отсутствуют" FontSize="10.5" Foreground="#3FB950" HorizontalAlignment="Center"/>
+                    <TextBlock Text="$($stats.MaxRpm) RPM max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Таймер сброса и Context Caching -->
+        <Grid Grid.Row="2" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#1C212B" BorderBrush="#2D3545" BorderThickness="1" CornerRadius="6" Padding="12,10">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="⏳" FontSize="13" Margin="0,0,6,0"/>
+                        <TextBlock Text="Сброс суточных лимитов" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2C08D"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtResetCountdown" Text="Через $($stats.ResetCountdown)" FontSize="15" FontWeight="Bold" Foreground="#FFFFFF"/>
+                    <TextBlock Text="в 00:00 UTC (03:00 МСК)" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2" Background="#1C2622" BorderBrush="#254236" BorderThickness="1" CornerRadius="6" Padding="12,10">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="🛡️" FontSize="13" Margin="0,0,6,0"/>
+                        <TextBlock Text="Экономия Context Caching" FontSize="11.5" FontWeight="SemiBold" Foreground="#4EC9B0"/>
+                    </StackPanel>
+                    <TextBlock Text="Сэкономлено ~90%" FontSize="15" FontWeight="Bold" Foreground="#4EC9B0"/>
+                    <TextBlock Text="Кэш снижает потребление квот и TPM" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Сравнительные лимиты моделей -->
+        <GroupBox Grid.Row="3" Header="Таблица квот по моделям" Foreground="#CCCCCC" BorderBrush="#2D3545" Margin="0,0,0,16">
+            <UniformGrid Columns="2" Margin="6,8,6,6">
+                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,0,4,4">
+                    <StackPanel>
+                        <TextBlock Text="🤖 Gemini 3.8 Flash (High/Med/Low)" FontSize="11" FontWeight="Bold" Foreground="#4EC9B0"/>
+                        <TextBlock Text="• Контекст: 1 000 000 токенов (1.0M)" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
+                        <TextBlock Text="• Лимиты: 1 500 RPD • 60 RPM • 4.0M TPM" FontSize="10.5" Foreground="#8B949E"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="4,0,0,4">
+                    <StackPanel>
+                        <TextBlock Text="🧠 Claude Sonnet 4.6 (Thinking)" FontSize="11" FontWeight="Bold" Foreground="#E2C08D"/>
+                        <TextBlock Text="• Контекст: 200 000 токенов • 64k Thinking" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
+                        <TextBlock Text="• Лимиты: 1 000 RPD • 50 RPM • 1.0M TPM" FontSize="10.5" Foreground="#8B949E"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,4,4,0">
+                    <StackPanel>
+                        <TextBlock Text="🔮 Claude Opus 4.6 (Thinking)" FontSize="11" FontWeight="Bold" Foreground="#BC8CFF"/>
+                        <TextBlock Text="• Контекст: 200 000 токенов • Deep Reasoning" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
+                        <TextBlock Text="• Лимиты: 500 RPD • 20 RPM • 500k TPM" FontSize="10.5" Foreground="#8B949E"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="4,4,0,0">
+                    <StackPanel>
+                        <TextBlock Text="⚡ GPT-OSS 120B (Medium)" FontSize="11" FontWeight="Bold" Foreground="#58A6FF"/>
+                        <TextBlock Text="• Контекст: 128 000 токенов" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
+                        <TextBlock Text="• Лимиты: 800 RPD • 30 RPM • 800k TPM" FontSize="10.5" Foreground="#8B949E"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+        </GroupBox>
+
+        <!-- Нижняя панель действий -->
+        <DockPanel Grid.Row="4">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button x:Name="BtnCopyUsageSummary" Content="📋 Скопировать отчет"
+                        Background="#252526" BorderBrush="#3E3E42" Foreground="#CCCCCC"
+                        Padding="12,6" FontSize="12" Cursor="Hand" Margin="0,0,8,0"/>
+                <Button x:Name="BtnRefreshUsageStats" Content="🔄 Обновить"
+                        Background="#252526" BorderBrush="#3E3E42" Foreground="#CCCCCC"
+                        Padding="12,6" FontSize="12" Cursor="Hand"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="BtnCloseDlg" Content="Закрыть" IsDefault="True" IsCancel="True"
+                        Background="#0E639C" BorderBrush="#1177BB" Foreground="#FFFFFF"
+                        Padding="20,6" FontWeight="SemiBold" Cursor="Hand"/>
+            </StackPanel>
+        </DockPanel>
+    </Grid>
+</Window>
+"@
+
+    try {
+        $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
+        $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
+        if ($OwnerWindow) {
+            $diag.Owner = $OwnerWindow
+        } elseif ($window) {
+            $diag.Owner = $window
+        }
+        if ($window -and $window.Icon) {
+            $diag.Icon = $window.Icon
+        }
+
+        $btnCopy = $diag.FindName("BtnCopyUsageSummary")
+        if ($btnCopy) {
+            $btnCopy.Add_Click({
+                $cur = Get-DailyUsageStats -modelName $activeModel
+                $report = @"
+⚡ Antigravity Usage Limits & Quotas Report
+-----------------------------------------
+Модель: $($cur.DisplayName) ($($cur.ModelName))
+Суточные запросы (RPD): $($cur.RequestsToday) / $($cur.MaxRpd) ($($cur.RpdPercent)% исп., $($cur.FreePercent)% свободно)
+Токены сегодня:
+  • Вход (Ingested): $(Format-TokenCount $cur.TokensTodayIn)
+  • Выход (Generated): $(Format-TokenCount $cur.TokensTodayOut)
+  • Суммарно: $(Format-TokenCount $cur.TokensTotal)
+  • Context Caching: $(Format-TokenCount $cur.TokensTodayCache) (экономия ~90%)
+Частота запросов: $($cur.RecentRpm) RPM (Лимит: $($cur.MaxRpm) RPM)
+Сброс квот: через $($cur.ResetCountdown) в 00:00 UTC (03:00 МСК)
+Статус: $($cur.OverallStatus)
+"@
+                try {
+                    [System.Windows.Clipboard]::SetText($report)
+                    $btnCopy.Content = "✔️ Скопировано!"
+                } catch {}
+            })
+        }
+
+        $btnRefresh = $diag.FindName("BtnRefreshUsageStats")
+        if ($btnRefresh) {
+            $btnRefresh.Add_Click({
+                $updated = Get-DailyUsageStats -modelName $activeModel -ForceRefresh
+                $tSub = $diag.FindName("TxtDlgSubtitle")
+                if ($tSub) { $tSub.Text = "Модель: $($updated.DisplayName) • Тариф: Antigravity Developer Pro" }
+                $tOverall = $diag.FindName("TxtOverallStatus")
+                if ($tOverall) {
+                    $tOverall.Text = $updated.OverallStatus
+                    $tOverall.Foreground = (Get-CachedBrush $updated.Color)
+                }
+                $dotOverall = $diag.FindName("DotOverallStatus")
+                if ($dotOverall) { $dotOverall.Fill = (Get-CachedBrush $updated.Color) }
+                $bOverall = $diag.FindName("BorderOverallStatus")
+                if ($bOverall) {
+                    $bOverall.Background = (Get-CachedBrush $updated.BadgeBg)
+                    $bOverall.BorderBrush = (Get-CachedBrush $updated.BadgeBorder)
+                }
+
+                $tRpd = $diag.FindName("TxtRpdValues")
+                if ($tRpd) { $tRpd.Text = "$($updated.RequestsToday) / $($updated.MaxRpd) ($($updated.RpdPercent)%)" }
+                $pRpd = $diag.FindName("PrgRpd")
+                if ($pRpd) {
+                    $pRpd.Value = $updated.RpdPercent
+                    $pRpd.Foreground = (Get-CachedBrush $updated.Color)
+                }
+                $tRem = $diag.FindName("TxtRpdRemaining")
+                if ($tRem) { $tRem.Text = "Свободно: $($updated.RpdRemaining) запрос(ов) • $($updated.FreePercent)% квоты доступно" }
+
+                $tTokVal = $diag.FindName("TxtTokensTodayValues")
+                if ($tTokVal) { $tTokVal.Text = "$(Format-TokenCount $updated.TokensTotal) токенов" }
+                $pTok = $diag.FindName("PrgTokens")
+                if ($pTok) { $pTok.Value = [math]::Min(100.0, [math]::Round(($updated.TokensTotal / 50000000.0) * 100.0, 1)) }
+                $tTokBd = $diag.FindName("TxtTokenBreakdown")
+                if ($tTokBd) { $tTokBd.Text = "📥 Вход: $(Format-TokenCount $updated.TokensTodayIn)  •  📤 Ответ: $(Format-TokenCount $updated.TokensTodayOut)  •  💾 Кэш: $(Format-TokenCount $updated.TokensTodayCache)" }
+
+                $tRpm = $diag.FindName("TxtRpmValues")
+                if ($tRpm) { $tRpm.Text = "Текущий темп: $($updated.RecentRpm) RPM  (Лимит: $($updated.MaxRpm) RPM)" }
+                $pRpm = $diag.FindName("PrgRpm")
+                if ($pRpm) { $pRpm.Value = [math]::Min(100.0, [math]::Round(($updated.RecentRpm / [double]$updated.MaxRpm) * 100.0, 1)) }
+
+                $tCountdown = $diag.FindName("TxtResetCountdown")
+                if ($tCountdown) { $tCountdown.Text = "Через $($updated.ResetCountdown)" }
+
+                Update-LimitsDisplay -modelName $activeModel
+            })
+        }
+
+        $diag.ShowDialog() | Out-Null
+    } catch {
+        [System.Windows.MessageBox]::Show($stats.ToolTipText, "⚡ Лимиты использования и квоты API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    }
+}
+
 function Get-ConversationPreviewText {
     param([string]$conversationId)
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
@@ -3327,6 +3880,7 @@ function Update-TabLoadingJobs {
                     $statusDot.Fill = (Get-CachedBrush "#4CAF50")
                     Scroll-ChatLogToEnd
                     Update-ContextDisplay -conversationId $job.ConvId -modelName $t.Model
+                    Update-LimitsDisplay -modelName $t.Model
                 }
             }
         }
@@ -3417,6 +3971,7 @@ function Select-ConversationItem {
     Start-AsyncTranscriptLoad -conversationId $conv.Id -Tab $targetTab
     $targetTab.IsTranscriptLoaded = $true
     Update-ContextDisplay -conversationId $conv.Id
+    Update-LimitsDisplay
     Save-LauncherConfig
 }
 
@@ -3456,6 +4011,7 @@ function Reset-ToNewChat {
     $txtStatus.Text = "Готов к работе (Новый диалог)"
     $statusDot.Fill = (Get-CachedBrush "#4CAF50")
     Update-ContextDisplay -conversationId $null
+    Update-LimitsDisplay
 
     $global:SuppressConvComboEvent = $true
     try {
@@ -3479,12 +4035,19 @@ function Remove-AntigravityConversation {
 
     $success = $false
     if (Test-Path $targetDir) {
-        try {
-            Remove-Item -Path $targetDir -Recurse -Force -ErrorAction Stop
-            $success = $true
-        } catch {
-            Write-Warning "Не удалось удалить директорию диалога $targetDir : $_"
-            return $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Remove-Item -Path $targetDir -Recurse -Force -ErrorAction Stop
+                $success = $true
+                break
+            } catch {
+                if ($attempt -lt 3) {
+                    Start-Sleep -Milliseconds 60
+                } else {
+                    Write-Warning "Не удалось удалить директорию диалога $targetDir : $_"
+                    return $false
+                }
+            }
         }
     }
 
@@ -4103,6 +4666,7 @@ function New-TabSession {
         ContextStats        = $null
         FullTranscriptTurns = $null
         IsTranscriptLoaded  = $isLoaded
+        TokensThisTurn      = 0
     }
 
     if ($isLoaded) {
@@ -4435,6 +4999,7 @@ function Switch-ToTab {
         }
         Update-TabHeadersVisual
         Update-ContextDisplay -conversationId $Tab.ConversationId -modelName $Tab.Model
+        Update-LimitsDisplay -modelName $Tab.Model
         return
     }
 
@@ -4491,6 +5056,7 @@ function Switch-ToTab {
 
     # Восстанавливаем индикатор контекста
     Update-ContextDisplay -conversationId $Tab.ConversationId -modelName $Tab.Model
+    Update-LimitsDisplay -modelName $Tab.Model
 
     # Состояние кнопок отправки / остановки
     $isRunning = [bool]$Tab.SyncState.IsRunning
@@ -4702,6 +5268,7 @@ function Restore-SavedTabs {
 Restore-SavedTabs
 $syncState = if ($global:ActiveTab) { $global:ActiveTab.SyncState } else { $null }
 Update-ContextDisplay
+Update-LimitsDisplay
 
 # --- Таймер обновления UI на основном потоке (параллельный опрос всех вкладок) ---
 $uiTimer = [System.Windows.Threading.DispatcherTimer]::new()
@@ -4789,6 +5356,7 @@ $uiTimer.Add_Tick({
                     Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $t.Document
                     if ($t.ConversationId) {
                         Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
+                        Update-LimitsDisplay -modelName $t.Model
                     }
                     if ($t -eq $global:ActiveTab) {
                         $btnSend.IsEnabled = $true
@@ -4856,6 +5424,7 @@ $cmbModel.Add_SelectionChanged({
         $global:ActiveTab.Model = $cmbModel.SelectedItem.ToString()
     }
     Update-ContextDisplay
+    Update-LimitsDisplay
 })
 
 # Очистка лога
@@ -4895,6 +5464,24 @@ if ($borderContextWidget) {
         param($sender, $e)
         if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
             Show-ContextDetailsDialog -OwnerWindow $window
+        }
+    })
+}
+
+# Интерактивный графический виджет лимитов использования: ховер-эффект и вызов модального дашборда
+if ($borderLimitsWidget) {
+    $borderLimitsWidget.Add_MouseEnter({
+        $borderLimitsWidget.Background = (Get-CachedBrush "#262C36")
+        $borderLimitsWidget.BorderBrush = (Get-CachedBrush "#3B4452")
+    })
+    $borderLimitsWidget.Add_MouseLeave({
+        $borderLimitsWidget.Background = (Get-CachedBrush "#1C1F26")
+        $borderLimitsWidget.BorderBrush = (Get-CachedBrush "#2D333B")
+    })
+    $borderLimitsWidget.Add_MouseDown({
+        param($sender, $e)
+        if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
+            Show-UsageLimitsDialog -OwnerWindow $window
         }
     })
 }
@@ -5009,6 +5596,10 @@ function Send-AgentPrompt {
         }
     }
     Save-LauncherConfig
+
+    # Инкремент суточных счетчиков лимитов использования
+    $global:SessionRequestsDelta++
+    Update-LimitsDisplay -modelName $model
 
     # Формирование полного промпта с путями к изображениям для агента
     $fullAgentPrompt = $prompt
