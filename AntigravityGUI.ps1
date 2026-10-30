@@ -2854,6 +2854,10 @@ function Get-ModelQuotaLimits {
 $global:DailyUsageCache = $null
 $global:DailyUsageCacheTime = [DateTime]::MinValue
 $global:SessionRequestsDelta = 0
+# Время до которого квота заблокирована API (429/RESOURCE_EXHAUSTED).
+# Если [DateTime]::Now < $global:QuotaBlockedUntil — отправка заблокирована.
+$global:QuotaBlockedUntil = [DateTime]::MinValue
+$global:QuotaBlockedMessage = ""
 
 function Get-DailyUsageStats {
     param(
@@ -2863,6 +2867,9 @@ function Get-DailyUsageStats {
     $quota = Get-ModelQuotaLimits -modelName $modelName
     $now = [DateTime]::Now
 
+    # Флаг реальной блокировки квоты API (429/RESOURCE_EXHAUSTED)
+    $isApiBlocked = ($global:QuotaBlockedUntil -gt $now)
+
     if (-not $ForceRefresh -and $global:DailyUsageCache -and (($now - $global:DailyUsageCacheTime).TotalSeconds -lt 60)) {
         $c = $global:DailyUsageCache
         $reqs = $c.BaseRequestsToday + $global:SessionRequestsDelta
@@ -2870,9 +2877,12 @@ function Get-DailyUsageStats {
         $remRpd = [math]::Max(0, ($quota.MaxRpd - $reqs))
         $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
 
-        $color = if ($rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
-        $badgeBg = if ($rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
-        $badgeBorder = if ($rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
+        # Если API вернул 429/quota — принудительно красный статус независимо от счётчика
+        $color      = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
+        $badgeBg    = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
+        $badgeBorder= if ($isApiBlocked -or $rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
+        $overallStatus = if ($isApiBlocked) { "⛔ Лимит исчерпан (API)" } elseif ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
+        $blockedNote = if ($isApiBlocked) { "`n⛔ ЗАБЛОКИРОВАНО API: $($global:QuotaBlockedMessage)" } else { "" }
 
         return [pscustomobject]@{
             ModelName        = $modelName
@@ -2894,8 +2904,9 @@ function Get-DailyUsageStats {
             Color            = $color
             BadgeBg          = $badgeBg
             BadgeBorder      = $badgeBorder
-            OverallStatus    = if ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
-            ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $reqs / $($quota.MaxRpd) ($rpdPct%)`n• Свободно квоты: $remRpd запр. ($freePct%)`n• Токенов сегодня: $(Format-TokenCount ($c.TokensTodayIn + $c.TokensTodayOut)) (Вход: $(Format-TokenCount $c.TokensTodayIn), Выход: $(Format-TokenCount $c.TokensTodayOut))`n• Кэшировано: $(Format-TokenCount $c.TokensTodayCache) токенов (экономия ~90%)`n• Скорость: $($c.RecentRpm) RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $($c.ResetCountdown) (00:00 UTC)`nНажмите для открытия подробного дашборда квот."
+            OverallStatus    = $overallStatus
+            IsApiBlocked     = $isApiBlocked
+            ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $reqs / $($quota.MaxRpd) ($rpdPct%)`n• Свободно квоты: $remRpd запр. ($freePct%)`n• Токенов сегодня: $(Format-TokenCount ($c.TokensTodayIn + $c.TokensTodayOut)) (Вход: $(Format-TokenCount $c.TokensTodayIn), Выход: $(Format-TokenCount $c.TokensTodayOut))`n• Кэшировано: $(Format-TokenCount $c.TokensTodayCache) токенов (экономия ~90%)`n• Скорость: $($c.RecentRpm) RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $($c.ResetCountdown) (00:00 UTC)$blockedNote`nНажмите для открытия подробного дашборда квот."
         }
     }
 
@@ -2961,9 +2972,12 @@ function Get-DailyUsageStats {
     $remRpd = [math]::Max(0, ($quota.MaxRpd - $totalReqs))
     $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
 
-    $color = if ($rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
-    $badgeBg = if ($rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
-    $badgeBorder = if ($rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
+    # Если API вернул 429/quota — принудительно красный статус независимо от счётчика
+    $color      = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
+    $badgeBg    = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
+    $badgeBorder= if ($isApiBlocked -or $rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
+    $overallStatus = if ($isApiBlocked) { "⛔ Лимит исчерпан (API)" } elseif ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
+    $blockedNote = if ($isApiBlocked) { "`n⛔ ЗАБЛОКИРОВАНО API: $($global:QuotaBlockedMessage)" } else { "" }
 
     return [pscustomobject]@{
         ModelName        = $modelName
@@ -2985,8 +2999,9 @@ function Get-DailyUsageStats {
         Color            = $color
         BadgeBg          = $badgeBg
         BadgeBorder      = $badgeBorder
-        OverallStatus    = if ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
-        ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $totalReqs / $($quota.MaxRpd) ($rpdPct%)`n• Свободно квоты: $remRpd запр. ($freePct%)`n• Токенов сегодня: $(Format-TokenCount ($inTokens + $outTokens)) (Вход: $(Format-TokenCount $inTokens), Выход: $(Format-TokenCount $outTokens))`n• Кэшировано: $(Format-TokenCount $cachedTokens) токенов (экономия ~90%)`n• Скорость: $rpmVelocity RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $countdown (00:00 UTC)`nНажмите для открытия подробного дашборда квот."
+        OverallStatus    = $overallStatus
+        IsApiBlocked     = $isApiBlocked
+        ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $totalReqs / $($quota.MaxRpd) ($rpdPct%)`n• Свободно квоты: $remRpd запр. ($freePct%)`n• Токенов сегодня: $(Format-TokenCount ($inTokens + $outTokens)) (Вход: $(Format-TokenCount $inTokens), Выход: $(Format-TokenCount $outTokens))`n• Кэшировано: $(Format-TokenCount $cachedTokens) токенов (экономия ~90%)`n• Скорость: $rpmVelocity RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $countdown (00:00 UTC)$blockedNote`nНажмите для открытия подробного дашборда квот."
     }
 }
 
@@ -3027,6 +3042,20 @@ function Update-LimitsDisplay {
     # 4. Тултип
     if ($borderLimitsWidget) {
         $borderLimitsWidget.ToolTip = $stats.ToolTipText
+    }
+
+    # 5. Если блокировка квоты истекла — восстанавливаем кнопку отправки
+    $nowCheck = [DateTime]::Now
+    if ($global:QuotaBlockedUntil -gt [DateTime]::MinValue -and $global:QuotaBlockedUntil -le $nowCheck) {
+        $global:QuotaBlockedUntil = [DateTime]::MinValue
+        $global:QuotaBlockedMessage = ""
+        $activeTab = if ($null -ne $global:ActiveTab) { $global:ActiveTab } else { $null }
+        if ($activeTab -and -not $activeTab.SyncState.IsRunning) {
+            if ($btnSend) { $btnSend.IsEnabled = $true }
+            if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
+            if ($txtStatus) { $txtStatus.Text = "Готов к работе" }
+            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50") }
+        }
     }
 }
 
@@ -5372,19 +5401,52 @@ $uiTimer.Add_Tick({
                     Finalize-ActiveToolGroup -Tab $t
                     Finalize-TabStreamingBuffer -Tab $t
                     $t.SyncState.IsRunning = $false
-                    $t.StatusText = "Ошибка выполнения"
-                    $t.StatusColor = "#F85149"
-                    if ($t.HeaderDot) {
-                        $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
-                    }
-                    Append-ChatFormatted -Text "`r`n❌ [ОШИБКА]: $($item.Message)`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
-                    if ($t -eq $global:ActiveTab) {
-                        $btnSend.IsEnabled = $true
-                        $btnStop.IsEnabled = $false
-                        $txtPromptInput.IsEnabled = $true
-                        $statusDot.Fill = (Get-CachedBrush "#F85149")
-                        $txtStatus.Text = "Ошибка выполнения"
-                        Scroll-ChatLogToEnd
+
+                    # Детектируем ошибки квот/rate-limit от API (429, RESOURCE_EXHAUSTED, weekly limit)
+                    $errMsg = $item.Message
+                    $isQuotaError = ($errMsg -match '429|RESOURCE_EXHAUSTED|quota|rate.?limit|Rate limit|weekly.?limit|Daily limit|RateLimitError|Quota exceeded|too many requests' )
+                    if ($isQuotaError) {
+                        # Блокируем отправку до следующего сброса (UTC 00:00 = 03:00 МСК),
+                        # но минимум на 10 минут чтобы не спамить запросами
+                        $nowForBlock = [DateTime]::Now
+                        $nextReset = [DateTime]::UtcNow.Date.AddDays(1).ToLocalTime()
+                        $blockUntil = if (($nextReset - $nowForBlock).TotalHours -le 1) { $nowForBlock.AddMinutes(10) } else { $nextReset }
+                        $global:QuotaBlockedUntil = $blockUntil
+                        # Сохраняем краткое сообщение (первые 200 символов)
+                        $shortMsg = if ($errMsg.Length -gt 200) { $errMsg.Substring(0, 200) + "…" } else { $errMsg }
+                        $global:QuotaBlockedMessage = $shortMsg
+                        # Принудительно обновляем виджет лимитов
+                        $global:DailyUsageCache = $null
+                        Update-LimitsDisplay
+                        $t.StatusText = "⛔ Лимит API исчерпан"
+                        $t.StatusColor = "#F85149"
+                        if ($t.HeaderDot) {
+                            $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
+                        }
+                        Append-ChatFormatted -Text "`r`n⛔ [ЛИМИТ ИСЧЕРПАН]: Квота API превышена. Отправка заблокирована до $($blockUntil.ToString('HH:mm')).$([Environment]::NewLine)$errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
+                        if ($t -eq $global:ActiveTab) {
+                            $btnSend.IsEnabled = $false
+                            $btnStop.IsEnabled = $false
+                            $txtPromptInput.IsEnabled = $false
+                            $statusDot.Fill = (Get-CachedBrush "#F85149")
+                            $txtStatus.Text = "⛔ Лимит API исчерпан"
+                            Scroll-ChatLogToEnd
+                        }
+                    } else {
+                        $t.StatusText = "Ошибка выполнения"
+                        $t.StatusColor = "#F85149"
+                        if ($t.HeaderDot) {
+                            $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
+                        }
+                        Append-ChatFormatted -Text "`r`n❌ [ОШИБКА]: $errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
+                        if ($t -eq $global:ActiveTab) {
+                            $btnSend.IsEnabled = $true
+                            $btnStop.IsEnabled = $false
+                            $txtPromptInput.IsEnabled = $true
+                            $statusDot.Fill = (Get-CachedBrush "#F85149")
+                            $txtStatus.Text = "Ошибка выполнения"
+                            Scroll-ChatLogToEnd
+                        }
                     }
                 }
             }
@@ -5551,6 +5613,14 @@ function Send-AgentPrompt {
     $tab = $global:ActiveTab
     if (-not $tab) { return }
     if ($tab.SyncState.IsRunning) { return }
+
+    # Проверка: не заблокированы ли квоты ошибкой API (429/RESOURCE_EXHAUSTED)
+    if ($global:QuotaBlockedUntil -gt [DateTime]::Now) {
+        $remainMin = [math]::Ceiling(($global:QuotaBlockedUntil - [DateTime]::Now).TotalMinutes)
+        Append-ChatFormatted -Text "`r`n⛔ [ЛИМИТ ИСЧЕРПАН]: Отправка заблокирована — квота API превышена. Попробуйте через $remainMin мин. (сброс в $($global:QuotaBlockedUntil.ToString('HH:mm')))`r`n`r`n" -Color "#F85149" -Bold -Document $tab.Document
+        Scroll-ChatLogToEnd
+        return
+    }
 
     # Если вкладка с сохраненным диалогом еще не была загружена, загружаем и дожидаемся завершения
     if (-not $tab.IsTranscriptLoaded -and $tab.ConversationId) {
