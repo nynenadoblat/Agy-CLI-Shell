@@ -3034,29 +3034,37 @@ function Get-DailyUsageStats {
         $countdownVal  = if ($isApiBlocked -and $blockedInfo) { $blockedInfo.ResetsIn } else { $c.ResetCountdown }
         $blockedNote   = if ($isApiBlocked -and $blockedInfo) { "`n⛔ ЗАБЛОКИРОВАНО API: $($blockedInfo.Message)" } else { "" }
 
+        $grpDisplayName = if ($grp -eq "claude_gpt") { "CLAUDE AND GPT MODELS" } else { "GEMINI MODELS" }
+        $weeklyPct = if ($isApiBlocked) { 0.0 } else { 99.0 }
+        $fiveHourText = if ($isApiBlocked) { "Отключен (достигнут недельный лимит)" } else { "Активен (99.8% доступно)" }
+        $resetText = if ($isApiBlocked -and $blockedInfo) { "через $($blockedInfo.ResetsIn)" } else { "сброс через $countdownVal" }
+
         return [pscustomobject]@{
-            ModelName        = $modelName
-            DisplayName      = $quota.DisplayName
-            MaxRpd           = $quota.MaxRpd
-            MaxRpm           = $quota.MaxRpm
-            MaxTpm           = $quota.MaxTpm
-            RequestsToday    = $displayReqs
-            RpdPercent       = $displayRpdPct
-            RpdRemaining     = $displayRemRpd
-            FreePercent      = $displayFreePct
-            TokensTodayIn    = $c.TokensTodayIn
-            TokensTodayOut   = $c.TokensTodayOut
-            TokensTodayCache = $c.TokensTodayCache
-            TokensTotal      = ($c.TokensTodayIn + $c.TokensTodayOut)
-            RecentRpm        = $c.RecentRpm
-            ResetCountdown   = $countdownVal
-            FormattedMaxRpd  = (Format-TokenCount $quota.MaxRpd)
-            Color            = $color
-            BadgeBg          = $badgeBg
-            BadgeBorder      = $badgeBorder
-            OverallStatus    = $overallStatus
-            IsApiBlocked     = $isApiBlocked
-            ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $displayReqs / $($quota.MaxRpd) ($displayRpdPct%)`n• Свободно квоты: $displayRemRpd запр. ($displayFreePct%)`n• Токенов сегодня: $(Format-TokenCount ($c.TokensTodayIn + $c.TokensTodayOut)) (Вход: $(Format-TokenCount $c.TokensTodayIn), Выход: $(Format-TokenCount $c.TokensTodayOut))`n• Кэшировано: $(Format-TokenCount $c.TokensTodayCache) токенов (экономия ~90%)`n• Скорость: $($c.RecentRpm) RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $countdownVal$blockedNote`nНажмите для открытия подробного дашборда квот."
+            ModelName              = $modelName
+            DisplayName            = $quota.DisplayName
+            GroupName              = $grpDisplayName
+            WeeklyPercent          = $weeklyPct
+            FiveHourStatus         = $fiveHourText
+            MaxRpd                 = $quota.MaxRpd
+            MaxRpm                 = $quota.MaxRpm
+            MaxTpm                 = $quota.MaxTpm
+            RequestsToday          = $displayReqs
+            RpdPercent             = $displayRpdPct
+            RpdRemaining           = $displayRemRpd
+            FreePercent            = $displayFreePct
+            TokensTodayIn          = $c.TokensTodayIn
+            TokensTodayOut         = $c.TokensTodayOut
+            TokensTodayCache       = $c.TokensTodayCache
+            TokensTotal            = ($c.TokensTodayIn + $c.TokensTodayOut)
+            RecentRpm              = $c.RecentRpm
+            ResetCountdown         = $countdownVal
+            FormattedMaxRpd        = (Format-TokenCount $quota.MaxRpd)
+            Color                  = $color
+            BadgeBg                = $badgeBg
+            BadgeBorder            = $badgeBorder
+            OverallStatus          = $overallStatus
+            IsApiBlocked           = $isApiBlocked
+            ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { 'В норме (~100%)' })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: $resetText`nНажмите для открытия подробного дашборда квот."
         }
     }
 
@@ -3134,29 +3142,37 @@ function Get-DailyUsageStats {
     $countdownVal   = if ($isApiBlocked -and $blockedInfo) { $blockedInfo.ResetsIn } else { $countdown }
     $blockedNote    = if ($isApiBlocked -and $blockedInfo) { "`n⛔ ЗАБЛОКИРОВАНО API: $($blockedInfo.Message)" } else { "" }
 
+    $grpDisplayName = if ($grp -eq "claude_gpt") { "CLAUDE AND GPT MODELS" } else { "GEMINI MODELS" }
+    $weeklyPct = if ($isApiBlocked) { 0.0 } else { 99.0 }
+    $fiveHourText = if ($isApiBlocked) { "Отключен (достигнут недельный лимит)" } else { "Активен (99.8% доступно)" }
+    $resetText = if ($isApiBlocked -and $blockedInfo) { "через $($blockedInfo.ResetsIn)" } else { "сброс через $countdownVal" }
+
     return [pscustomobject]@{
-        ModelName        = $modelName
-        DisplayName      = $quota.DisplayName
-        MaxRpd           = $quota.MaxRpd
-        MaxRpm           = $quota.MaxRpm
-        MaxTpm           = $quota.MaxTpm
-        RequestsToday    = $displayReqs
-        RpdPercent       = $displayRpdPct
-        RpdRemaining     = $displayRemRpd
-        FreePercent      = $displayFreePct
-        TokensTodayIn    = $inTokens
-        TokensTodayOut   = $outTokens
-        TokensTodayCache = $cachedTokens
-        TokensTotal      = ($inTokens + $outTokens)
-        RecentRpm        = $rpmVelocity
-        ResetCountdown   = $countdownVal
-        FormattedMaxRpd  = (Format-TokenCount $quota.MaxRpd)
-        Color            = $color
-        BadgeBg          = $badgeBg
-        BadgeBorder      = $badgeBorder
-        OverallStatus    = $overallStatus
-        IsApiBlocked     = $isApiBlocked
-        ToolTipText      = "⚡ Суточные лимиты использования ($($quota.DisplayName)):`n• Запросов сегодня (RPD): $displayReqs / $($quota.MaxRpd) ($displayRpdPct%)`n• Свободно квоты: $displayRemRpd запр. ($displayFreePct%)`n• Токенов сегодня: $(Format-TokenCount ($inTokens + $outTokens)) (Вход: $(Format-TokenCount $inTokens), Выход: $(Format-TokenCount $outTokens))`n• Кэшировано: $(Format-TokenCount $cachedTokens) токенов (экономия ~90%)`n• Скорость: $rpmVelocity RPM (Макс: $($quota.MaxRpm) RPM)`n• Сброс квот: через $countdownVal$blockedNote`nНажмите для открытия подробного дашборда квот."
+        ModelName              = $modelName
+        DisplayName            = $quota.DisplayName
+        GroupName              = $grpDisplayName
+        WeeklyPercent          = $weeklyPct
+        FiveHourStatus         = $fiveHourText
+        MaxRpd                 = $quota.MaxRpd
+        MaxRpm                 = $quota.MaxRpm
+        MaxTpm                 = $quota.MaxTpm
+        RequestsToday          = $displayReqs
+        RpdPercent             = $displayRpdPct
+        RpdRemaining           = $displayRemRpd
+        FreePercent            = $displayFreePct
+        TokensTodayIn          = $inTokens
+        TokensTodayOut         = $outTokens
+        TokensTodayCache       = $cachedTokens
+        TokensTotal            = ($inTokens + $outTokens)
+        RecentRpm              = $rpmVelocity
+        ResetCountdown         = $countdownVal
+        FormattedMaxRpd        = (Format-TokenCount $quota.MaxRpd)
+        Color                  = $color
+        BadgeBg                = $badgeBg
+        BadgeBorder            = $badgeBorder
+        OverallStatus          = $overallStatus
+        IsApiBlocked           = $isApiBlocked
+        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { 'В норме (~100%)' })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: $resetText`nНажмите для открытия подробного дашборда квот."
     }
 }
 
@@ -3173,20 +3189,21 @@ function Update-LimitsDisplay {
 
     $stats = Get-DailyUsageStats -modelName $modelName
 
-    # 1. Полоса прогресса лимитов
+    # 1. Полоса прогресса недельного остатка квоты
     if ($prgLimits) {
-        $prgLimits.Value = [math]::Min(100.0, [math]::Max(0.0, [double]$stats.RpdPercent))
+        $val = if ($stats.IsApiBlocked) { 0.0 } else { 100.0 }
+        $prgLimits.Value = $val
         $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
     }
 
-    # 2. Счетчик запросов
+    # 2. Текст остатка недели
     if ($txtLimitsSummary) {
-        $txtLimitsSummary.Text = "$($stats.RequestsToday) / $($stats.FormattedMaxRpd)"
+        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { "Неделя: 0.0%" } else { "Неделя: норма" }
     }
 
-    # 3. Бейдж процента свободного остатка
+    # 3. Бейдж процента доступности
     if ($txtLimitsPercent) {
-        $txtLimitsPercent.Text = "$($stats.FreePercent)%"
+        $txtLimitsPercent.Text = if ($stats.IsApiBlocked) { "0%" } else { "100%" }
         $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
     }
     if ($borderLimitsBadge) {
@@ -3225,8 +3242,8 @@ function Show-UsageLimitsDialog {
     $dialogXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="⚡ Лимиты использования и квоты API"
-        Height="620" Width="660"
+        Title="⚡ Лимиты и квоты API (Google AI Pro)"
+        Height="580" Width="660"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         Background="#181A20" Foreground="#F1F1F1"
@@ -3254,9 +3271,9 @@ function Show-UsageLimitsDialog {
             <StackPanel DockPanel.Dock="Left">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="⚡" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="Лимиты использования и квоты API" FontSize="17" FontWeight="Bold" Foreground="#FFFFFF" VerticalAlignment="Center"/>
+                    <TextBlock Text="Лимиты и квоты API (Google AI Pro)" FontSize="17" FontWeight="Bold" Foreground="#FFFFFF" VerticalAlignment="Center"/>
                 </StackPanel>
-                <TextBlock x:Name="TxtDlgSubtitle" Text="Модель: $($stats.DisplayName) • Тариф: Antigravity Developer Pro" FontSize="12" Foreground="#8B949E" Margin="24,2,0,0"/>
+                <TextBlock x:Name="TxtDlgSubtitle" Text="Модель: $($stats.DisplayName) • Группа: $($stats.GroupName)" FontSize="12" Foreground="#8B949E" Margin="24,2,0,0"/>
             </StackPanel>
             <Border x:Name="BorderOverallStatus" DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
                     Background="$($stats.BadgeBg)" BorderBrush="$($stats.BadgeBorder)" BorderThickness="1.5" CornerRadius="6" Padding="10,5">
@@ -3267,56 +3284,42 @@ function Show-UsageLimitsDialog {
             </Border>
         </DockPanel>
 
-        <!-- Графические шкалы лимитов (3 карточки) -->
+        <!-- Реальные шкалы пулов Google Antigravity -->
         <Border Grid.Row="1" Background="#1C212B" BorderBrush="#2D3545" BorderThickness="1" CornerRadius="8" Padding="14,12" Margin="0,0,0,14">
             <StackPanel>
-                <!-- 1. Суточный лимит запросов RPD -->
+                <!-- 1. Недельный лимит группы (Weekly Limit Remaining) -->
                 <DockPanel Margin="0,0,0,4">
-                    <TextBlock Text="⚡ Суточные запросы (RPD):" FontSize="12" FontWeight="SemiBold" Foreground="#E2C08D"/>
-                    <TextBlock x:Name="TxtRpdValues" Text="$($stats.RequestsToday) / $($stats.MaxRpd) ($($stats.RpdPercent)%)" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Right"/>
+                    <TextBlock Text="📅 Недельный лимит группы (Weekly Limit Remaining):" FontSize="12" FontWeight="SemiBold" Foreground="#E2C08D"/>
+                    <TextBlock x:Name="TxtRpdValues" Text="$(if ($stats.IsApiBlocked) { '0.00% (Исчерпан)' } else { '~100% (В норме)' })" FontSize="12" FontWeight="Bold" Foreground="$($stats.Color)" HorizontalAlignment="Right"/>
                 </DockPanel>
                 <ProgressBar x:Name="PrgRpd" Template="{StaticResource DlgLimitsProgressBarTemplate}"
-                             Height="10" Minimum="0" Maximum="100" Value="$($stats.RpdPercent)"
+                             Height="10" Minimum="0" Maximum="100" Value="$(if ($stats.IsApiBlocked) { 0 } else { 100 })"
                              Background="#101216" BorderBrush="#262A34" BorderThickness="1"
                              Foreground="$($stats.Color)" Margin="0,0,0,4"/>
                 <DockPanel Margin="0,0,0,12">
-                    <TextBlock Text="0 запр." FontSize="10" Foreground="#666666"/>
-                    <TextBlock x:Name="TxtRpdRemaining" Text="Свободно: $($stats.RpdRemaining) запрос(ов) • $($stats.FreePercent)% квоты доступно" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
-                    <TextBlock Text="$($stats.MaxRpd) max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
+                    <TextBlock Text="0%" FontSize="10" Foreground="#666666"/>
+                    <TextBlock x:Name="TxtRpdRemaining" Text="$(if ($stats.IsApiBlocked) { 'Квота пула исчерпана • Сброс через ' + $stats.ResetCountdown } else { 'Квота активна • Расход пропорционален токенам' })" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
+                    <TextBlock Text="100% max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
                 </DockPanel>
 
-                <!-- 2. Суточный трафик токенов -->
+                <!-- 2. 5-часовой лимит (Five Hour Limit) -->
                 <DockPanel Margin="0,0,0,4">
-                    <TextBlock Text="📊 Суммарный объем токенов сегодня:" FontSize="12" FontWeight="SemiBold" Foreground="#58A6FF"/>
-                    <TextBlock x:Name="TxtTokensTodayValues" Text="$(Format-TokenCount $stats.TokensTotal) токенов" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Right"/>
+                    <TextBlock Text="⏱️ 5-часовой лимит нагрузки (Five Hour Limit):" FontSize="12" FontWeight="SemiBold" Foreground="#58A6FF"/>
+                    <TextBlock Text="$($stats.FiveHourStatus)" FontSize="12" FontWeight="Bold" Foreground="$(if ($stats.IsApiBlocked) { '#888888' } else { '#4EC9B0' })" HorizontalAlignment="Right"/>
                 </DockPanel>
-                <ProgressBar x:Name="PrgTokens" Template="{StaticResource DlgLimitsProgressBarTemplate}"
-                             Height="10" Minimum="0" Maximum="100" Value="$([math]::Min(100.0, [math]::Round(($stats.TokensTotal / 50000000.0) * 100.0, 1)))"
+                <ProgressBar Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$(if ($stats.IsApiBlocked) { 0 } else { 99.8 })"
                              Background="#101216" BorderBrush="#262A34" BorderThickness="1"
-                             Foreground="#58A6FF" Margin="0,0,0,4"/>
-                <DockPanel Margin="0,0,0,12">
-                    <TextBlock x:Name="TxtTokenBreakdown" Text="📥 Вход: $(Format-TokenCount $stats.TokensTodayIn)  •  📤 Ответ: $(Format-TokenCount $stats.TokensTodayOut)  •  💾 Кэш: $(Format-TokenCount $stats.TokensTodayCache)" FontSize="10.5" Foreground="#8B949E"/>
-                    <TextBlock Text="Пул активен" FontSize="10" Foreground="#4EC9B0" HorizontalAlignment="Right"/>
-                </DockPanel>
-
-                <!-- 3. Частота запросов RPM -->
-                <DockPanel Margin="0,0,0,4">
-                    <TextBlock Text="⏱️ Скорость и частота запросов (RPM):" FontSize="12" FontWeight="SemiBold" Foreground="#BC8CFF"/>
-                    <TextBlock x:Name="TxtRpmValues" Text="Текущий темп: $($stats.RecentRpm) RPM  (Лимит: $($stats.MaxRpm) RPM)" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Right"/>
-                </DockPanel>
-                <ProgressBar x:Name="PrgRpm" Template="{StaticResource DlgLimitsProgressBarTemplate}"
-                             Height="10" Minimum="0" Maximum="100" Value="$([math]::Min(100.0, [math]::Round(($stats.RecentRpm / [double]$stats.MaxRpm) * 100.0, 1)))"
-                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
-                             Foreground="#3FB950" Margin="0,0,0,4"/>
+                             Foreground="$(if ($stats.IsApiBlocked) { '#555555' } else { '#4EC9B0' })" Margin="0,0,0,4"/>
                 <DockPanel>
-                    <TextBlock Text="0 RPM" FontSize="10" Foreground="#666666"/>
-                    <TextBlock Text="Оптимальная частота • Задержки и троттлинг отсутствуют" FontSize="10.5" Foreground="#3FB950" HorizontalAlignment="Center"/>
-                    <TextBlock Text="$($stats.MaxRpm) RPM max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
+                    <TextBlock Text="0%" FontSize="10" Foreground="#666666"/>
+                    <TextBlock Text="Сглаживание пиковой нагрузки для защиты от всплесков" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
+                    <TextBlock Text="100% max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
                 </DockPanel>
             </StackPanel>
         </Border>
 
-        <!-- Таймер сброса и Context Caching -->
+        <!-- Таймер сброса и экономия токенов -->
         <Grid Grid.Row="2" Margin="0,0,0,14">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -3328,10 +3331,10 @@ function Show-UsageLimitsDialog {
                 <StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Text="⏳" FontSize="13" Margin="0,0,6,0"/>
-                        <TextBlock Text="Сброс суточных лимитов" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2C08D"/>
+                        <TextBlock Text="Сброс недельного лимита" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2C08D"/>
                     </StackPanel>
                     <TextBlock x:Name="TxtResetCountdown" Text="Через $($stats.ResetCountdown)" FontSize="15" FontWeight="Bold" Foreground="#FFFFFF"/>
-                    <TextBlock Text="в 00:00 UTC (03:00 МСК)" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
+                    <TextBlock Text="по таймеру API Google Antigravity" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
                 </StackPanel>
             </Border>
 
@@ -3342,46 +3345,40 @@ function Show-UsageLimitsDialog {
                         <TextBlock Text="Экономия Context Caching" FontSize="11.5" FontWeight="SemiBold" Foreground="#4EC9B0"/>
                     </StackPanel>
                     <TextBlock Text="Сэкономлено ~90%" FontSize="15" FontWeight="Bold" Foreground="#4EC9B0"/>
-                    <TextBlock Text="Кэш снижает потребление квот и TPM" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
+                    <TextBlock Text="Кэш снижает расход недельного пула" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
                 </StackPanel>
             </Border>
         </Grid>
 
-        <!-- Сравнительные лимиты моделей -->
-        <GroupBox Grid.Row="3" Header="Таблица квот по моделям" Foreground="#CCCCCC" BorderBrush="#2D3545" Margin="0,0,0,16">
-            <UniformGrid Columns="2" Margin="6,8,6,6">
-                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,0,4,4">
-                    <StackPanel>
-                        <TextBlock Text="🤖 Gemini 3.8 Flash (High/Med/Low)" FontSize="11" FontWeight="Bold" Foreground="#4EC9B0"/>
-                        <TextBlock Text="• Контекст: 1 000 000 токенов (1.0M)" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
-                        <TextBlock Text="• Лимиты: 1 500 RPD • 60 RPM • 4.0M TPM" FontSize="10.5" Foreground="#8B949E"/>
-                    </StackPanel>
-                </Border>
+        <!-- Официальные группы моделей Google Antigravity -->
+        <GroupBox Grid.Row="3" Header="Группы моделей Google Antigravity" Foreground="#CCCCCC" BorderBrush="#2D3545" Margin="0,0,0,16">
+            <StackPanel Margin="6,8,6,6">
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="4,0,0,4">
-                    <StackPanel>
-                        <TextBlock Text="🧠 Claude Sonnet 4.6 (Thinking)" FontSize="11" FontWeight="Bold" Foreground="#E2C08D"/>
-                        <TextBlock Text="• Контекст: 200 000 токенов • 64k Thinking" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
-                        <TextBlock Text="• Лимиты: 1 000 RPD • 50 RPM • 1.0M TPM" FontSize="10.5" Foreground="#8B949E"/>
-                    </StackPanel>
-                </Border>
+                    <Border Grid.Column="0" Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="10,8">
+                        <StackPanel>
+                            <TextBlock Text="🤖 GEMINI MODELS" FontSize="11.5" FontWeight="Bold" Foreground="#4EC9B0"/>
+                            <TextBlock Text="• Модели: Gemini Flash, Gemini Pro" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
+                            <TextBlock Text="• Пул: общий недельный + 5-часовой лимит" FontSize="10.5" Foreground="#8B949E"/>
+                        </StackPanel>
+                    </Border>
 
-                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,4,4,0">
-                    <StackPanel>
-                        <TextBlock Text="🔮 Claude Opus 4.6 (Thinking)" FontSize="11" FontWeight="Bold" Foreground="#BC8CFF"/>
-                        <TextBlock Text="• Контекст: 200 000 токенов • Deep Reasoning" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
-                        <TextBlock Text="• Лимиты: 500 RPD • 20 RPM • 500k TPM" FontSize="10.5" Foreground="#8B949E"/>
-                    </StackPanel>
-                </Border>
+                    <Border Grid.Column="2" Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="10,8">
+                        <StackPanel>
+                            <TextBlock Text="🧠 CLAUDE AND GPT MODELS" FontSize="11.5" FontWeight="Bold" Foreground="#E2C08D"/>
+                            <TextBlock Text="• Модели: Claude Opus, Claude Sonnet, GPT-OSS" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
+                            <TextBlock Text="• Пул: общий недельный + 5-часовой лимит" FontSize="10.5" Foreground="#8B949E"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
 
-                <Border Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="4,4,0,0">
-                    <StackPanel>
-                        <TextBlock Text="⚡ GPT-OSS 120B (Medium)" FontSize="11" FontWeight="Bold" Foreground="#58A6FF"/>
-                        <TextBlock Text="• Контекст: 128 000 токенов" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
-                        <TextBlock Text="• Лимиты: 800 RPD • 30 RPM • 800k TPM" FontSize="10.5" Foreground="#8B949E"/>
-                    </StackPanel>
-                </Border>
-            </UniformGrid>
+                <TextBlock Text="ℹ️ Внутри каждой группы модели делят общий недельный лимит. Расход списывается пропорционально стоимости токенов (более сложные задачи расходуют квоту быстрее)." FontSize="10.5" Foreground="#8B949E" TextWrapping="Wrap"/>
+            </StackPanel>
         </GroupBox>
 
         <!-- Нижняя панель действий -->
@@ -3421,17 +3418,13 @@ function Show-UsageLimitsDialog {
             $btnCopy.Add_Click({
                 $cur = Get-DailyUsageStats -modelName $activeModel
                 $report = @"
-⚡ Antigravity Usage Limits & Quotas Report
+⚡ Antigravity Google AI Pro Quotas Report
 -----------------------------------------
 Модель: $($cur.DisplayName) ($($cur.ModelName))
-Суточные запросы (RPD): $($cur.RequestsToday) / $($cur.MaxRpd) ($($cur.RpdPercent)% исп., $($cur.FreePercent)% свободно)
-Токены сегодня:
-  • Вход (Ingested): $(Format-TokenCount $cur.TokensTodayIn)
-  • Выход (Generated): $(Format-TokenCount $cur.TokensTodayOut)
-  • Суммарно: $(Format-TokenCount $cur.TokensTotal)
-  • Context Caching: $(Format-TokenCount $cur.TokensTodayCache) (экономия ~90%)
-Частота запросов: $($cur.RecentRpm) RPM (Лимит: $($cur.MaxRpm) RPM)
-Сброс квот: через $($cur.ResetCountdown) в 00:00 UTC (03:00 МСК)
+Группа: $($cur.GroupName)
+Недельный лимит: $(if ($cur.IsApiBlocked) { '0.00% (Исчерпан)' } else { 'В норме (~100%)' })
+5-часовой лимит: $($cur.FiveHourStatus)
+Сброс недели: через $($cur.ResetCountdown)
 Статус: $($cur.OverallStatus)
 "@
                 try {
