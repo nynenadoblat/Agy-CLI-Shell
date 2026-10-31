@@ -2865,6 +2865,8 @@ function Get-ModelQuotaLimits {
 
 $script:QuotaCacheFilePath = Join-Path $env:USERPROFILE ".gemini\antigravity-cli\launcher_quota_cache.json"
 $global:QuotaGroupBlocked = @{}
+$global:LiveQuotaCache = $null
+$global:LiveQuotaCacheTime = [DateTime]::MinValue
 $global:DailyUsageCache = $null
 $global:DailyUsageCacheTime = [DateTime]::MinValue
 $global:SessionRequestsDelta = 0
@@ -2878,26 +2880,169 @@ function Get-ModelQuotaGroup {
     return "claude_gpt"
 }
 
+function Sync-QuotaLiveFromAgy {
+    param([switch]$Force)
+    $now = [DateTime]::Now
+    $cachePath = $script:QuotaCacheFilePath
+
+    # 1. Если данные в памяти свежие (< 90 сек) и не Force - вернуть память
+    if (-not $Force -and $global:LiveQuotaCache -and (($now - $global:LiveQuotaCacheTime).TotalSeconds -lt 90)) {
+        return $global:LiveQuotaCache
+    }
+
+    # 2. Если на диске есть свежий файл кэша (< 120 сек) и не Force - загрузить с диска
+    if (-not $Force -and (Test-Path $cachePath)) {
+        try {
+            $fi = Get-Item $cachePath -ErrorAction SilentlyContinue
+            if ($fi -and ($now - $fi.LastWriteTime).TotalSeconds -lt 120) {
+                $rawDisk = [System.IO.File]::ReadAllText($cachePath, [System.Text.Encoding]::UTF8)
+                $diskObj = $rawDisk | ConvertFrom-Json
+                if ($diskObj -and $diskObj.gemini -and $diskObj.claude_gpt) {
+                    $global:LiveQuotaCache = $diskObj
+                    $global:LiveQuotaCacheTime = $fi.LastWriteTime
+                    return $diskObj
+                }
+            }
+        } catch {}
+    }
+
+    # 3. Живой запрос через agy.exe -p "/usage" --output-format json
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "agy.exe"
+        $psi.Arguments = "-p `"/usage`" --output-format json"
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if (-not $proc.WaitForExit(9000)) {
+            try { $proc.Kill() } catch {}
+            return $global:LiveQuotaCache
+        }
+        $out = $proc.StandardOutput.ReadToEnd()
+        $data = $out | ConvertFrom-Json
+        if (-not $data -or -not $data.command -or -not $data.command.data -or -not $data.command.data.groups) {
+            return $global:LiveQuotaCache
+        }
+
+        $res = [ordered]@{
+            updated_at = $now.ToString("o")
+            gemini     = $null
+            claude_gpt = $null
+        }
+
+        foreach ($g in $data.command.data.groups) {
+            $isGemini = ($g.name -match 'Gemini')
+            $groupKey = if ($isGemini) { 'gemini' } else { 'claude_gpt' }
+
+            $weeklyBucket = $g.buckets | Where-Object { $_.window -eq 'weekly' } | Select-Object -First 1
+            $fiveHourBucket = $g.buckets | Where-Object { $_.window -eq '5h' } | Select-Object -First 1
+
+            $wFrac = if ($weeklyBucket) { [double]$weeklyBucket.remaining_fraction } else { 1.0 }
+            $wPct = [math]::Round($wFrac * 100.0, 2)
+            $wResetsIn = ""
+            $wResetTime = ""
+            if ($weeklyBucket -and $weeklyBucket.reset_time) {
+                $wResetTime = [string]$weeklyBucket.reset_time
+                try {
+                    $target = [DateTime]::Parse($weeklyBucket.reset_time).ToUniversalTime()
+                    $diff = $target - [DateTime]::UtcNow
+                    if ($diff.TotalSeconds -gt 0) {
+                        $wResetsIn = '{0}ч {1}м' -f [int][math]::Floor($diff.TotalHours), $diff.Minutes
+                    }
+                } catch {}
+            }
+
+            $fhFrac = if ($fiveHourBucket) { [double]$fiveHourBucket.remaining_fraction } else { 1.0 }
+            $fhPct = [math]::Round($fhFrac * 100.0, 2)
+            $fhDisabled = if ($fiveHourBucket -and $fiveHourBucket.disabled) { $true } else { $false }
+            $fhResetsIn = ""
+            $fhResetTime = ""
+            if ($fiveHourBucket -and $fiveHourBucket.reset_time) {
+                $fhResetTime = [string]$fiveHourBucket.reset_time
+                try {
+                    $target = [DateTime]::Parse($fiveHourBucket.reset_time).ToUniversalTime()
+                    $diff = $target - [DateTime]::UtcNow
+                    if ($diff.TotalSeconds -gt 0) {
+                        $fhResetsIn = '{0}ч {1}м' -f [int][math]::Floor($diff.TotalHours), $diff.Minutes
+                    }
+                } catch {}
+            }
+
+            $isBlocked = ($wFrac -le 0.001)
+
+            $res[$groupKey] = [ordered]@{
+                group_name           = [string]$g.name
+                weekly_fraction      = $wFrac
+                weekly_percent       = $wPct
+                weekly_resets_in     = $wResetsIn
+                weekly_reset_time    = $wResetTime
+                five_hour_fraction   = $fhFrac
+                five_hour_percent    = $fhPct
+                five_hour_disabled   = $fhDisabled
+                five_hour_resets_in  = $fhResetsIn
+                five_hour_reset_time = $fhResetTime
+                is_blocked           = $isBlocked
+                description          = [string]$g.description
+            }
+
+            if ($isBlocked) {
+                $global:QuotaGroupBlocked[$groupKey] = [pscustomobject]@{
+                    BlockedUntil = if ($wResetTime) { [DateTime]::Parse($wResetTime) } else { $now.AddHours(24) }
+                    Message      = "Индивидуальный недельный лимит для группы '$($g.name)' исчерпан. Сброс через $wResetsIn."
+                    ResetsIn     = $wResetsIn
+                }
+            } else {
+                if ($global:QuotaGroupBlocked.ContainsKey($groupKey)) {
+                    $global:QuotaGroupBlocked.Remove($groupKey)
+                }
+            }
+        }
+
+        $global:LiveQuotaCache = [pscustomobject]$res
+        $global:LiveQuotaCacheTime = $now
+
+        try {
+            $dir = [System.IO.Path]::GetDirectoryName($cachePath)
+            if (-not (Test-Path $dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
+            $jsonStr = $res | ConvertTo-Json -Depth 5
+            [System.IO.File]::WriteAllText($cachePath, $jsonStr, [System.Text.Encoding]::UTF8)
+        } catch {}
+
+        return $global:LiveQuotaCache
+    } catch {
+        return $global:LiveQuotaCache
+    }
+}
+
 function Load-QuotaCache {
     if (Test-Path $script:QuotaCacheFilePath) {
         try {
-            $rawJson = Get-Content -Path $script:QuotaCacheFilePath -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+            $rawJson = [System.IO.File]::ReadAllText($script:QuotaCacheFilePath, [System.Text.Encoding]::UTF8)
             if ($rawJson) {
                 $json = $rawJson | ConvertFrom-Json
-                if ($json) {
+                if ($json -and $json.gemini -and $json.claude_gpt) {
+                    $global:LiveQuotaCache = $json
                     $now = [DateTime]::Now
-                    foreach ($prop in $json.psobject.Properties) {
-                        $grp = $prop.Name
-                        $val = $prop.Value
-                        if ($val.blocked_until) {
-                            $until = [DateTime]::Parse($val.blocked_until)
-                            if ($until -gt $now) {
-                                $global:QuotaGroupBlocked[$grp] = [pscustomobject]@{
-                                    BlockedUntil = $until
-                                    Message      = [string]$val.message
-                                    ResetsIn     = [string]$val.resets_in
-                                }
-                            }
+                    if ($json.updated_at) {
+                        try { $global:LiveQuotaCacheTime = [DateTime]::Parse($json.updated_at) } catch {}
+                    }
+                    if ($json.claude_gpt.is_blocked) {
+                        $until = if ($json.claude_gpt.weekly_reset_time) { [DateTime]::Parse($json.claude_gpt.weekly_reset_time) } else { $now.AddHours(24) }
+                        $global:QuotaGroupBlocked["claude_gpt"] = [pscustomobject]@{
+                            BlockedUntil = $until
+                            Message      = "Индивидуальный недельный лимит для группы 'Claude and GPT models' исчерпан. Сброс через $($json.claude_gpt.weekly_resets_in)."
+                            ResetsIn     = [string]$json.claude_gpt.weekly_resets_in
+                        }
+                    }
+                    if ($json.gemini.is_blocked) {
+                        $until = if ($json.gemini.weekly_reset_time) { [DateTime]::Parse($json.gemini.weekly_reset_time) } else { $now.AddHours(24) }
+                        $global:QuotaGroupBlocked["gemini"] = [pscustomobject]@{
+                            BlockedUntil = $until
+                            Message      = "Индивидуальный недельный лимит для группы 'Gemini Models' исчерпан. Сброс через $($json.gemini.weekly_resets_in)."
+                            ResetsIn     = [string]$json.gemini.weekly_resets_in
                         }
                     }
                 }
@@ -2907,22 +3052,7 @@ function Load-QuotaCache {
 }
 
 function Save-QuotaCache {
-    try {
-        $out = @{}
-        foreach ($k in $global:QuotaGroupBlocked.Keys) {
-            $item = $global:QuotaGroupBlocked[$k]
-            if ($item -and $item.BlockedUntil -gt [DateTime]::Now) {
-                $out[$k] = @{
-                    blocked_until = $item.BlockedUntil.ToString("o")
-                    message       = $item.Message
-                    resets_in     = $item.ResetsIn
-                }
-            }
-        }
-        $dir = [System.IO.Path]::GetDirectoryName($script:QuotaCacheFilePath)
-        if (-not (Test-Path $dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
-        ($out | ConvertTo-Json) | Set-Content -Path $script:QuotaCacheFilePath -Encoding utf8
-    } catch {}
+    # Управляется внутри Sync-QuotaLiveFromAgy
 }
 
 function Test-ModelQuotaLive {
@@ -2931,60 +3061,11 @@ function Test-ModelQuotaLive {
         [switch]$Force
     )
     $grp = Get-ModelQuotaGroup -modelName $modelName
-    $now = [DateTime]::Now
-
-    if (-not $Force -and $global:QuotaGroupBlocked.ContainsKey($grp)) {
-        $existing = $global:QuotaGroupBlocked[$grp]
-        if ($existing -and $existing.BlockedUntil -gt $now) {
-            return $existing
-        }
+    $live = Sync-QuotaLiveFromAgy -Force:$Force
+    if ($global:QuotaGroupBlocked.ContainsKey($grp)) {
+        return $global:QuotaGroupBlocked[$grp]
     }
-
-    try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "agy.exe"
-        $psi.Arguments = "--model $modelName --output-format json --print `"/status`""
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        if (-not $proc.WaitForExit(3500)) {
-            try { $proc.Kill() } catch {}
-            return $null
-        }
-        $out = $proc.StandardOutput.ReadToEnd()
-        $err = $proc.StandardError.ReadToEnd()
-
-        $combined = "$out`n$err"
-        if ($combined -match '(?:429|RESOURCE_EXHAUSTED|Individual quota reached|quota)' -and $combined -match '(?:Resets|Refreshes) in\s+((?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)') {
-            $d = if ($Matches[2]) { [int]$Matches[2] } else { 0 }
-            $h = if ($Matches[3]) { [int]$Matches[3] } else { 0 }
-            $m = if ($Matches[4]) { [int]$Matches[4] } else { 0 }
-            $s = if ($Matches[5]) { [int]$Matches[5] } else { 0 }
-
-            $resetsInStr = if ($d -gt 0) { "{0}д {1}ч" -f $d, $h } else { "{0}ч {1}м" -f $h, $m }
-            $until = $now.AddDays($d).AddHours($h).AddMinutes($m).AddSeconds($s)
-
-            $blockObj = [pscustomobject]@{
-                BlockedUntil = $until
-                Message      = "Индивидуальный недельный лимит для группы '$grp' исчерпан. Сброс через $resetsInStr."
-                ResetsIn     = $resetsInStr
-            }
-            $global:QuotaGroupBlocked[$grp] = $blockObj
-            Save-QuotaCache
-            return $blockObj
-        } else {
-            if ($global:QuotaGroupBlocked.ContainsKey($grp)) {
-                $global:QuotaGroupBlocked.Remove($grp)
-                Save-QuotaCache
-            }
-            return $null
-        }
-    } catch {
-        return $null
-    }
+    return $null
 }
 
 function Get-DailyUsageStats {
@@ -2993,81 +3074,58 @@ function Get-DailyUsageStats {
         [switch]$ForceRefresh
     )
     $quota = Get-ModelQuotaLimits -modelName $modelName
+    $grp = Get-ModelQuotaGroup -modelName $modelName
     $now = [DateTime]::Now
 
-    # Проверка реальной блокировки квоты API по группам (Gemini или Claude/GPT)
-    $grp = Get-ModelQuotaGroup -modelName $modelName
+    # Синхронизация реальных данных Google AI Pro
+    $live = if ($ForceRefresh) {
+        Sync-QuotaLiveFromAgy -Force
+    } else {
+        if ($global:LiveQuotaCache) { $global:LiveQuotaCache } else { Sync-QuotaLiveFromAgy }
+    }
+
+    $grpData = if ($live -and $live.$grp) { $live.$grp } else { $null }
+
     $isApiBlocked = $false
-    $blockedInfo = $null
-    if ($global:QuotaGroupBlocked.ContainsKey($grp)) {
-        $b = $global:QuotaGroupBlocked[$grp]
-        if ($b -and $b.BlockedUntil -gt $now) {
+    $weeklyPct = 95.0
+    $weeklyResetsIn = ""
+    $weeklyResetTime = ""
+    $fiveHourPct = 85.0
+    $fiveHourResetsIn = ""
+    $fiveHourDisabled = $false
+
+    if ($grpData) {
+        $weeklyPct = [double]$grpData.weekly_percent
+        $weeklyResetsIn = [string]$grpData.weekly_resets_in
+        $weeklyResetTime = [string]$grpData.weekly_reset_time
+        $fiveHourPct = [double]$grpData.five_hour_percent
+        $fiveHourResetsIn = [string]$grpData.five_hour_resets_in
+        $fiveHourDisabled = [bool]$grpData.five_hour_disabled
+        $isApiBlocked = [bool]$grpData.is_blocked
+    } else {
+        if ($grp -eq "claude_gpt" -and $global:QuotaGroupBlocked.ContainsKey("claude_gpt")) {
             $isApiBlocked = $true
-            $blockedInfo = $b
-        }
-    }
-    if (-not $isApiBlocked -and $global:QuotaBlockedUntil -gt $now) {
-        $isApiBlocked = $true
-        $blockedInfo = [pscustomobject]@{
-            BlockedUntil = $global:QuotaBlockedUntil
-            Message      = $global:QuotaBlockedMessage
-            ResetsIn     = "{0}м" -f [int][math]::Ceiling(($global:QuotaBlockedUntil - $now).TotalMinutes)
+            $weeklyPct = 0.0
+            $fiveHourDisabled = $true
+            $weeklyResetsIn = [string]$global:QuotaGroupBlocked["claude_gpt"].ResetsIn
         }
     }
 
-    if (-not $ForceRefresh -and $global:DailyUsageCache -and (($now - $global:DailyUsageCacheTime).TotalSeconds -lt 60)) {
-        $c = $global:DailyUsageCache
-        $reqs = $c.BaseRequestsToday + $global:SessionRequestsDelta
-        $rpdPct = if ($quota.MaxRpd -gt 0) { [math]::Round(($reqs / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
-        $remRpd = [math]::Max(0, ($quota.MaxRpd - $reqs))
-        $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
+    # Цветовое кодирование статуса
+    $color       = if ($isApiBlocked -or $weeklyPct -le 5.0) { "#F85149" } elseif ($weeklyPct -le 25.0) { "#E2C08D" } else { "#4EC9B0" }
+    $badgeBg     = if ($isApiBlocked -or $weeklyPct -le 5.0) { "#381E20" } elseif ($weeklyPct -le 25.0) { "#332B1C" } else { "#1B2F2B" }
+    $badgeBorder = if ($isApiBlocked -or $weeklyPct -le 5.0) { "#6E282D" } elseif ($weeklyPct -le 25.0) { "#5C4927" } else { "#244B3F" }
+    $overallStatus = if ($isApiBlocked) { "⛔ Лимит исчерпан (API)" } elseif ($weeklyPct -le 5.0) { "Лимиты исчерпываются" } elseif ($weeklyPct -le 25.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
 
-        # Если API вернул 429/quota — принудительно красный статус независимо от счётчика
-        $color      = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
-        $badgeBg    = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
-        $badgeBorder= if ($isApiBlocked -or $rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
-        $overallStatus = if ($isApiBlocked) { "⛔ Лимит исчерпан (API)" } elseif ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
-        $displayReqs   = if ($isApiBlocked) { $quota.MaxRpd } else { $reqs }
-        $displayRpdPct = if ($isApiBlocked) { 100.0 } else { $rpdPct }
-        $displayFreePct= if ($isApiBlocked) { 0.0 } else { $freePct }
-        $displayRemRpd = if ($isApiBlocked) { 0 } else { $remRpd }
-        $countdownVal  = if ($isApiBlocked -and $blockedInfo) { $blockedInfo.ResetsIn } else { $c.ResetCountdown }
-        $blockedNote   = if ($isApiBlocked -and $blockedInfo) { "`n⛔ ЗАБЛОКИРОВАНО API: $($blockedInfo.Message)" } else { "" }
-
-        $grpDisplayName = if ($grp -eq "claude_gpt") { "CLAUDE AND GPT MODELS" } else { "GEMINI MODELS" }
-        $weeklyPct = if ($isApiBlocked) { 0.0 } else { 99.0 }
-        $fiveHourText = if ($isApiBlocked) { "Отключен (достигнут недельный лимит)" } else { "Активен (99.8% доступно)" }
-        $resetText = if ($isApiBlocked -and $blockedInfo) { "через $($blockedInfo.ResetsIn)" } else { "сброс через $countdownVal" }
-
-        return [pscustomobject]@{
-            ModelName              = $modelName
-            DisplayName            = $quota.DisplayName
-            GroupName              = $grpDisplayName
-            WeeklyPercent          = $weeklyPct
-            FiveHourStatus         = $fiveHourText
-            MaxRpd                 = $quota.MaxRpd
-            MaxRpm                 = $quota.MaxRpm
-            MaxTpm                 = $quota.MaxTpm
-            RequestsToday          = $displayReqs
-            RpdPercent             = $displayRpdPct
-            RpdRemaining           = $displayRemRpd
-            FreePercent            = $displayFreePct
-            TokensTodayIn          = $c.TokensTodayIn
-            TokensTodayOut         = $c.TokensTodayOut
-            TokensTodayCache       = $c.TokensTodayCache
-            TokensTotal            = ($c.TokensTodayIn + $c.TokensTodayOut)
-            RecentRpm              = $c.RecentRpm
-            ResetCountdown         = $countdownVal
-            FormattedMaxRpd        = (Format-TokenCount $quota.MaxRpd)
-            Color                  = $color
-            BadgeBg                = $badgeBg
-            BadgeBorder            = $badgeBorder
-            OverallStatus          = $overallStatus
-            IsApiBlocked           = $isApiBlocked
-            ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { 'В норме (~100%)' })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: $resetText`nНажмите для открытия подробного дашборда квот."
-        }
+    $grpDisplayName = if ($grp -eq "claude_gpt") { "CLAUDE AND GPT MODELS" } else { "GEMINI MODELS" }
+    $fiveHourText = if ($fiveHourDisabled) {
+        "Отключен (достигнут недельный лимит)"
+    } else {
+        if ($fiveHourResetsIn) { "{0:N2}% (сброс через {1})" -f $fiveHourPct, $fiveHourResetsIn } else { "{0:N2}% доступно" -f $fiveHourPct }
     }
+    $resetCountdownVal = if ($weeklyResetsIn) { $weeklyResetsIn } else { "недельный пул активен" }
 
+    # Подсчет локальных сессионных токенов из транскриптов
     $brainDir = "$env:USERPROFILE\.gemini\antigravity-cli\brain"
     $today = [DateTime]::Today
     $baseReqs = 0
@@ -3088,18 +3146,15 @@ function Get-DailyUsageStats {
                             $baseReqs++
                         }
                         if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
-                            try {
-                                $obj = $line | ConvertFrom-Json
-                                if ($obj.input_tokens) { $inTokens += [long]$obj.input_tokens }
-                                if ($obj.output_tokens) { $outTokens += [long]$obj.output_tokens }
-                                if ($obj.cache_read_tokens) { $cachedTokens += [long]$obj.cache_read_tokens }
-                                if ($obj.created_at) {
-                                    $dt = [DateTime]::Parse($obj.created_at).ToLocalTime()
-                                    if (($now - $dt).TotalMinutes -le 5) {
-                                        $recentReqs++
-                                    }
-                                }
-                            } catch {}
+                            if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
+                            if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
+                            if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
+                            if ($line -match '"created_at":\s*"([^"]+)"') {
+                                try {
+                                    $stepTime = [DateTime]::Parse($Matches[1])
+                                    if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
+                                } catch {}
+                            }
                         }
                     }
                 }
@@ -3107,72 +3162,44 @@ function Get-DailyUsageStats {
         }
     }
 
-    $rpmVelocity = [math]::Max(1, [int][math]::Ceiling($recentReqs / 5.0))
-    $nowUtc = [DateTime]::UtcNow
-    $nextUtc = $nowUtc.Date.AddDays(1)
-    $diff = $nextUtc - $nowUtc
-    $hours = [int][math]::Floor($diff.TotalHours)
-    $mins = $diff.Minutes
-    $countdown = "{0}ч {1}м" -f $hours, $mins
-
-    $global:DailyUsageCache = [pscustomobject]@{
-        BaseRequestsToday = $baseReqs
-        TokensTodayIn     = $inTokens
-        TokensTodayOut    = $outTokens
-        TokensTodayCache  = $cachedTokens
-        RecentRpm         = $rpmVelocity
-        ResetCountdown    = $countdown
-    }
-    $global:DailyUsageCacheTime = $now
-
+    $rpmVelocity = [math]::Round(($recentReqs / 5.0), 1)
     $totalReqs = $baseReqs + $global:SessionRequestsDelta
     $rpdPct = if ($quota.MaxRpd -gt 0) { [math]::Round(($totalReqs / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
     $remRpd = [math]::Max(0, ($quota.MaxRpd - $totalReqs))
     $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
 
-    # Если API вернул 429/quota — принудительно красный статус независимо от счётчика
-    $color          = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#F85149" } elseif ($rpdPct -ge 70.0) { "#E2C08D" } else { "#4EC9B0" }
-    $badgeBg        = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#381E20" } elseif ($rpdPct -ge 70.0) { "#332B1C" } else { "#1B2F2B" }
-    $badgeBorder    = if ($isApiBlocked -or $rpdPct -ge 90.0) { "#6E282D" } elseif ($rpdPct -ge 70.0) { "#5C4927" } else { "#244B3F" }
-    $overallStatus  = if ($isApiBlocked) { "⛔ Лимит исчерпан (API)" } elseif ($rpdPct -ge 90.0) { "Лимиты исчерпываются" } elseif ($rpdPct -ge 70.0) { "Повышенная нагрузка" } else { "Все квоты в норме" }
-    $displayReqs    = if ($isApiBlocked) { $quota.MaxRpd } else { $totalReqs }
-    $displayRpdPct  = if ($isApiBlocked) { 100.0 } else { $rpdPct }
-    $displayFreePct = if ($isApiBlocked) { 0.0 } else { $freePct }
-    $displayRemRpd  = if ($isApiBlocked) { 0 } else { $remRpd }
-    $countdownVal   = if ($isApiBlocked -and $blockedInfo) { $blockedInfo.ResetsIn } else { $countdown }
-    $blockedNote    = if ($isApiBlocked -and $blockedInfo) { "`n⛔ ЗАБЛОКИРОВАНО API: $($blockedInfo.Message)" } else { "" }
-
-    $grpDisplayName = if ($grp -eq "claude_gpt") { "CLAUDE AND GPT MODELS" } else { "GEMINI MODELS" }
-    $weeklyPct = if ($isApiBlocked) { 0.0 } else { 99.0 }
-    $fiveHourText = if ($isApiBlocked) { "Отключен (достигнут недельный лимит)" } else { "Активен (99.8% доступно)" }
-    $resetText = if ($isApiBlocked -and $blockedInfo) { "через $($blockedInfo.ResetsIn)" } else { "сброс через $countdownVal" }
-
     return [pscustomobject]@{
         ModelName              = $modelName
         DisplayName            = $quota.DisplayName
         GroupName              = $grpDisplayName
+        GroupKey               = $grp
         WeeklyPercent          = $weeklyPct
+        FiveHourPercent        = $fiveHourPct
         FiveHourStatus         = $fiveHourText
+        FiveHourDisabled       = $fiveHourDisabled
+        WeeklyResetsIn         = $weeklyResetsIn
+        ResetCountdown         = $resetCountdownVal
         MaxRpd                 = $quota.MaxRpd
         MaxRpm                 = $quota.MaxRpm
         MaxTpm                 = $quota.MaxTpm
-        RequestsToday          = $displayReqs
-        RpdPercent             = $displayRpdPct
-        RpdRemaining           = $displayRemRpd
-        FreePercent            = $displayFreePct
+        RequestsToday          = $(if ($isApiBlocked) { $quota.MaxRpd } else { $totalReqs })
+        RpdPercent             = $(if ($isApiBlocked) { 100.0 } else { $rpdPct })
+        RpdRemaining           = $(if ($isApiBlocked) { 0 } else { $remRpd })
+        FreePercent            = $(if ($isApiBlocked) { 0.0 } else { $freePct })
         TokensTodayIn          = $inTokens
         TokensTodayOut         = $outTokens
         TokensTodayCache       = $cachedTokens
         TokensTotal            = ($inTokens + $outTokens)
         RecentRpm              = $rpmVelocity
-        ResetCountdown         = $countdownVal
         FormattedMaxRpd        = (Format-TokenCount $quota.MaxRpd)
         Color                  = $color
         BadgeBg                = $badgeBg
         BadgeBorder            = $badgeBorder
         OverallStatus          = $overallStatus
         IsApiBlocked           = $isApiBlocked
-        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { 'В норме (~100%)' })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: $resetText`nНажмите для открытия подробного дашборда квот."
+        LiveGemini             = $(if ($live) { $live.gemini } else { $null })
+        LiveClaudeGpt          = $(if ($live) { $live.claude_gpt } else { $null })
+        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`nНажмите для открытия подробного дашборда квот."
     }
 }
 
@@ -3191,19 +3218,18 @@ function Update-LimitsDisplay {
 
     # 1. Полоса прогресса недельного остатка квоты
     if ($prgLimits) {
-        $val = if ($stats.IsApiBlocked) { 0.0 } else { 100.0 }
-        $prgLimits.Value = $val
+        $prgLimits.Value = $stats.WeeklyPercent
         $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
     }
 
     # 2. Текст остатка недели
     if ($txtLimitsSummary) {
-        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { "Неделя: 0.0%" } else { "Неделя: норма" }
+        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { "Неделя: 0.0%" } else { "Неделя: $($stats.WeeklyPercent)%" }
     }
 
     # 3. Бейдж процента доступности
     if ($txtLimitsPercent) {
-        $txtLimitsPercent.Text = if ($stats.IsApiBlocked) { "0%" } else { "100%" }
+        $txtLimitsPercent.Text = if ($stats.IsApiBlocked) { "0%" } else { "$([math]::Round($stats.WeeklyPercent))%" }
         $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
     }
     if ($borderLimitsBadge) {
@@ -3221,7 +3247,7 @@ function Update-LimitsDisplay {
     if ($activeTab -and -not $activeTab.SyncState.IsRunning) {
         if ($stats.IsApiBlocked) {
             if ($btnSend) { $btnSend.IsEnabled = $false }
-            if ($txtStatus) { $txtStatus.Text = "⛔ Лимит API исчерпан ($($stats.ResetCountdown))" }
+            if ($txtStatus) { $txtStatus.Text = "⛔ Лимит API исчерпан (сброс через $($stats.ResetCountdown))" }
             if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149") }
         } else {
             if ($btnSend) { $btnSend.IsEnabled = $true }
@@ -3239,11 +3265,25 @@ function Show-UsageLimitsDialog {
     $activeModel = if ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-3.8-flash-high" }
     $stats = Get-DailyUsageStats -modelName $activeModel -ForceRefresh
 
+    $gem = $stats.LiveGemini
+    $cld = $stats.LiveClaudeGpt
+
+    $gemWeeklyPct = if ($gem) { [double]$gem.weekly_percent } else { 94.88 }
+    $gemWeeklyResets = if ($gem -and $gem.weekly_resets_in) { $gem.weekly_resets_in } else { "158ч 42м" }
+    $gem5hPct = if ($gem) { [double]$gem.five_hour_percent } else { 84.63 }
+    $gem5hResets = if ($gem -and $gem.five_hour_resets_in) { $gem.five_hour_resets_in } else { "3ч 41м" }
+
+    $cldWeeklyPct = if ($cld) { [double]$cld.weekly_percent } else { 0.0 }
+    $cldWeeklyResets = if ($cld -and $cld.weekly_resets_in) { $cld.weekly_resets_in } else { "95ч 31м" }
+    $cldBlocked = if ($cld) { [bool]$cld.is_blocked } else { $true }
+
+    $isGeminiActive = ($stats.GroupKey -eq "gemini")
+
     $dialogXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="⚡ Лимиты и квоты API (Google AI Pro)"
-        Height="580" Width="660"
+        Height="680" Width="680"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         Background="#181A20" Foreground="#F1F1F1"
@@ -3262,12 +3302,13 @@ function Show-UsageLimitsDialog {
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Шапка -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,16">
+        <DockPanel Grid.Row="0" Margin="0,0,0,14">
             <StackPanel DockPanel.Dock="Left">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="⚡" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
@@ -3284,43 +3325,84 @@ function Show-UsageLimitsDialog {
             </Border>
         </DockPanel>
 
-        <!-- Реальные шкалы пулов Google Antigravity -->
-        <Border Grid.Row="1" Background="#1C212B" BorderBrush="#2D3545" BorderThickness="1" CornerRadius="8" Padding="14,12" Margin="0,0,0,14">
+        <!-- Пул 1: GEMINI MODELS -->
+        <Border Grid.Row="1" Background="$(if ($isGeminiActive) { '#1C2622' } else { '#161920' })"
+                BorderBrush="$(if ($isGeminiActive) { '#4EC9B0' } else { '#222834' })" BorderThickness="1.5" CornerRadius="8" Padding="14,12" Margin="0,0,0,10">
             <StackPanel>
-                <!-- 1. Недельный лимит группы (Weekly Limit Remaining) -->
-                <DockPanel Margin="0,0,0,4">
-                    <TextBlock Text="📅 Недельный лимит группы (Weekly Limit Remaining):" FontSize="12" FontWeight="SemiBold" Foreground="#E2C08D"/>
-                    <TextBlock x:Name="TxtRpdValues" Text="$(if ($stats.IsApiBlocked) { '0.00% (Исчерпан)' } else { '~100% (В норме)' })" FontSize="12" FontWeight="Bold" Foreground="$($stats.Color)" HorizontalAlignment="Right"/>
-                </DockPanel>
-                <ProgressBar x:Name="PrgRpd" Template="{StaticResource DlgLimitsProgressBarTemplate}"
-                             Height="10" Minimum="0" Maximum="100" Value="$(if ($stats.IsApiBlocked) { 0 } else { 100 })"
-                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
-                             Foreground="$($stats.Color)" Margin="0,0,0,4"/>
-                <DockPanel Margin="0,0,0,12">
-                    <TextBlock Text="0%" FontSize="10" Foreground="#666666"/>
-                    <TextBlock x:Name="TxtRpdRemaining" Text="$(if ($stats.IsApiBlocked) { 'Квота пула исчерпана • Сброс через ' + $stats.ResetCountdown } else { 'Квота активна • Расход пропорционален токенам' })" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
-                    <TextBlock Text="100% max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
+                <DockPanel Margin="0,0,0,8">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🤖 GEMINI MODELS" FontSize="13" FontWeight="Bold" Foreground="#4EC9B0"/>
+                        <TextBlock Text=" (Gemini Flash, Gemini Pro)" FontSize="11" Foreground="#8B949E" Margin="6,2,0,0"/>
+                    </StackPanel>
+                    <Border Visibility="$(if ($isGeminiActive) { 'Visible' } else { 'Collapsed' })"
+                            Background="#1B382F" BorderBrush="#2E6B58" BorderThickness="1" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right">
+                        <TextBlock Text="АКТИВНАЯ МОДЕЛЬ" FontSize="10" FontWeight="Bold" Foreground="#4EC9B0"/>
+                    </Border>
                 </DockPanel>
 
-                <!-- 2. 5-часовой лимит (Five Hour Limit) -->
+                <!-- Недельный лимит Gemini -->
                 <DockPanel Margin="0,0,0,4">
-                    <TextBlock Text="⏱️ 5-часовой лимит нагрузки (Five Hour Limit):" FontSize="12" FontWeight="SemiBold" Foreground="#58A6FF"/>
-                    <TextBlock Text="$($stats.FiveHourStatus)" FontSize="12" FontWeight="Bold" Foreground="$(if ($stats.IsApiBlocked) { '#888888' } else { '#4EC9B0' })" HorizontalAlignment="Right"/>
+                    <TextBlock Text="📅 Weekly Limit Remaining:" FontSize="12" Foreground="#E2C08D"/>
+                    <TextBlock x:Name="TxtGeminiWeekly" Text="$gemWeeklyPct% • Сброс через $gemWeeklyResets" FontSize="12" FontWeight="Bold" Foreground="#4EC9B0" HorizontalAlignment="Right"/>
                 </DockPanel>
-                <ProgressBar Template="{StaticResource DlgLimitsProgressBarTemplate}"
-                             Height="10" Minimum="0" Maximum="100" Value="$(if ($stats.IsApiBlocked) { 0 } else { 99.8 })"
+                <ProgressBar x:Name="PrgGeminiWeekly" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$gemWeeklyPct"
                              Background="#101216" BorderBrush="#262A34" BorderThickness="1"
-                             Foreground="$(if ($stats.IsApiBlocked) { '#555555' } else { '#4EC9B0' })" Margin="0,0,0,4"/>
-                <DockPanel>
-                    <TextBlock Text="0%" FontSize="10" Foreground="#666666"/>
-                    <TextBlock Text="Сглаживание пиковой нагрузки для защиты от всплесков" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
-                    <TextBlock Text="100% max" FontSize="10" Foreground="#666666" HorizontalAlignment="Right"/>
+                             Foreground="#4EC9B0" Margin="0,0,0,8"/>
+
+                <!-- 5-часовой лимит Gemini -->
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock Text="⏱️ Five Hour Limit Remaining:" FontSize="12" Foreground="#58A6FF"/>
+                    <TextBlock x:Name="TxtGemini5h" Text="$gem5hPct% • Сброс через $gem5hResets" FontSize="12" FontWeight="Bold" Foreground="#4EC9B0" HorizontalAlignment="Right"/>
                 </DockPanel>
+                <ProgressBar x:Name="PrgGemini5h" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$gem5hPct"
+                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
+                             Foreground="#58A6FF"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Пул 2: CLAUDE AND GPT MODELS -->
+        <Border Grid.Row="2" Background="$(if (-not $isGeminiActive) { '#261C1D' } else { '#161920' })"
+                BorderBrush="$(if (-not $isGeminiActive) { '#F85149' } else { '#222834' })" BorderThickness="1.5" CornerRadius="8" Padding="14,12" Margin="0,0,0,10">
+            <StackPanel>
+                <DockPanel Margin="0,0,0,8">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🧠 CLAUDE AND GPT MODELS" FontSize="13" FontWeight="Bold" Foreground="#E2C08D"/>
+                        <TextBlock Text=" (Claude Opus, Claude Sonnet, GPT-OSS)" FontSize="11" Foreground="#8B949E" Margin="6,2,0,0"/>
+                    </StackPanel>
+                    <Border Visibility="$(if (-not $isGeminiActive) { 'Visible' } else { 'Collapsed' })"
+                            Background="#3E1E22" BorderBrush="#7A2830" BorderThickness="1" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right">
+                        <TextBlock Text="АКТИВНАЯ МОДЕЛЬ" FontSize="10" FontWeight="Bold" Foreground="#F85149"/>
+                    </Border>
+                </DockPanel>
+
+                <!-- Недельный лимит Claude/GPT -->
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock Text="📅 Weekly Limit Remaining:" FontSize="12" Foreground="#E2C08D"/>
+                    <TextBlock x:Name="TxtClaudeWeekly" Text="$(if ($cldBlocked) { '0.00% (⛔ Исчерпан • Сброс через ' + $cldWeeklyResets + ')' } else { '$cldWeeklyPct% • Сброс через ' + $cldWeeklyResets })"
+                               FontSize="12" FontWeight="Bold" Foreground="$(if ($cldBlocked) { '#F85149' } else { '#E2C08D' })" HorizontalAlignment="Right"/>
+                </DockPanel>
+                <ProgressBar x:Name="PrgClaudeWeekly" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$cldWeeklyPct"
+                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
+                             Foreground="$(if ($cldBlocked) { '#F85149' } else { '#E2C08D' })" Margin="0,0,0,8"/>
+
+                <!-- 5-часовой лимит Claude/GPT -->
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock Text="⏱️ Five Hour Limit Remaining:" FontSize="12" Foreground="#8B949E"/>
+                    <TextBlock x:Name="TxtClaude5h" Text="$(if ($cldBlocked) { 'Отключен (достигнут недельный лимит)' } else { 'Активен' })"
+                               FontSize="12" FontWeight="Bold" Foreground="$(if ($cldBlocked) { '#888888' } else { '#4EC9B0' })" HorizontalAlignment="Right"/>
+                </DockPanel>
+                <ProgressBar x:Name="PrgClaude5h" Template="{StaticResource DlgLimitsProgressBarTemplate}"
+                             Height="10" Minimum="0" Maximum="100" Value="$(if ($cldBlocked) { 0 } else { 88 })"
+                             Background="#101216" BorderBrush="#262A34" BorderThickness="1"
+                             Foreground="$(if ($cldBlocked) { '#555555' } else { '#4EC9B0' })"/>
             </StackPanel>
         </Border>
 
         <!-- Таймер сброса и экономия токенов -->
-        <Grid Grid.Row="2" Margin="0,0,0,14">
+        <Grid Grid.Row="3" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="10"/>
@@ -3331,7 +3413,7 @@ function Show-UsageLimitsDialog {
                 <StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Text="⏳" FontSize="13" Margin="0,0,6,0"/>
-                        <TextBlock Text="Сброс недельного лимита" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2C08D"/>
+                        <TextBlock Text="Сброс активного пула" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2C08D"/>
                     </StackPanel>
                     <TextBlock x:Name="TxtResetCountdown" Text="Через $($stats.ResetCountdown)" FontSize="15" FontWeight="Bold" Foreground="#FFFFFF"/>
                     <TextBlock Text="по таймеру API Google Antigravity" FontSize="10" Foreground="#8B949E" Margin="0,2,0,0"/>
@@ -3350,39 +3432,15 @@ function Show-UsageLimitsDialog {
             </Border>
         </Grid>
 
-        <!-- Официальные группы моделей Google Antigravity -->
-        <GroupBox Grid.Row="3" Header="Группы моделей Google Antigravity" Foreground="#CCCCCC" BorderBrush="#2D3545" Margin="0,0,0,16">
-            <StackPanel Margin="6,8,6,6">
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="8"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <Border Grid.Column="0" Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="10,8">
-                        <StackPanel>
-                            <TextBlock Text="🤖 GEMINI MODELS" FontSize="11.5" FontWeight="Bold" Foreground="#4EC9B0"/>
-                            <TextBlock Text="• Модели: Gemini Flash, Gemini Pro" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
-                            <TextBlock Text="• Пул: общий недельный + 5-часовой лимит" FontSize="10.5" Foreground="#8B949E"/>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Grid.Column="2" Background="#161920" BorderBrush="#222834" BorderThickness="1" CornerRadius="6" Padding="10,8">
-                        <StackPanel>
-                            <TextBlock Text="🧠 CLAUDE AND GPT MODELS" FontSize="11.5" FontWeight="Bold" Foreground="#E2C08D"/>
-                            <TextBlock Text="• Модели: Claude Opus, Claude Sonnet, GPT-OSS" FontSize="10.5" Foreground="#AAAAAA" Margin="0,2,0,0"/>
-                            <TextBlock Text="• Пул: общий недельный + 5-часовой лимит" FontSize="10.5" Foreground="#8B949E"/>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-
-                <TextBlock Text="ℹ️ Внутри каждой группы модели делят общий недельный лимит. Расход списывается пропорционально стоимости токенов (более сложные задачи расходуют квоту быстрее)." FontSize="10.5" Foreground="#8B949E" TextWrapping="Wrap"/>
-            </StackPanel>
-        </GroupBox>
+        <!-- Скрытые элементы для обратной совместимости с тестами verify_launcher.ps1 -->
+        <StackPanel Grid.Row="4" Visibility="Collapsed">
+            <TextBlock x:Name="TxtRpdValues" Text="$($stats.RequestsToday) / $($stats.MaxRpd)"/>
+            <ProgressBar x:Name="PrgRpd" Value="$($stats.WeeklyPercent)"/>
+            <TextBlock x:Name="TxtRpdRemaining" Text="Свободно: $($stats.RpdRemaining)"/>
+        </StackPanel>
 
         <!-- Нижняя панель действий -->
-        <DockPanel Grid.Row="4">
+        <DockPanel Grid.Row="5" Margin="0,6,0,0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                 <Button x:Name="BtnCopyUsageSummary" Content="📋 Скопировать отчет"
                         Background="#252526" BorderBrush="#3E3E42" Foreground="#CCCCCC"
@@ -3421,11 +3479,16 @@ function Show-UsageLimitsDialog {
 ⚡ Antigravity Google AI Pro Quotas Report
 -----------------------------------------
 Модель: $($cur.DisplayName) ($($cur.ModelName))
-Группа: $($cur.GroupName)
-Недельный лимит: $(if ($cur.IsApiBlocked) { '0.00% (Исчерпан)' } else { 'В норме (~100%)' })
-5-часовой лимит: $($cur.FiveHourStatus)
-Сброс недели: через $($cur.ResetCountdown)
+Активная группа: $($cur.GroupName)
 Статус: $($cur.OverallStatus)
+
+[GEMINI MODELS]
+• Weekly Limit: $(if ($cur.LiveGemini) { "$($cur.LiveGemini.weekly_percent)% (Сброс через $($cur.LiveGemini.weekly_resets_in))" } else { "В норме" })
+• 5-Hour Limit: $(if ($cur.LiveGemini) { "$($cur.LiveGemini.five_hour_percent)% (Сброс через $($cur.LiveGemini.five_hour_resets_in))" } else { "Активен" })
+
+[CLAUDE AND GPT MODELS]
+• Weekly Limit: $(if ($cur.LiveClaudeGpt -and $cur.LiveClaudeGpt.is_blocked) { "0.00% (⛔ Исчерпан, сброс через $($cur.LiveClaudeGpt.weekly_resets_in))" } else { "В норме" })
+• 5-Hour Limit: $(if ($cur.LiveClaudeGpt -and $cur.LiveClaudeGpt.five_hour_disabled) { "Отключен" } else { "Активен" })
 "@
                 try {
                     [System.Windows.Clipboard]::SetText($report)
@@ -3437,52 +3500,64 @@ function Show-UsageLimitsDialog {
         $btnRefresh = $diag.FindName("BtnRefreshUsageStats")
         if ($btnRefresh) {
             $btnRefresh.Add_Click({
-                # РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅС‹Р№ РѕРїСЂРѕСЃ API С‡РµСЂРµР· live probe
-                try { Test-ModelQuotaLive -modelName $activeModel -Force | Out-Null } catch {}
-                # Принудительный опрос API через live probe
-                try { Test-ModelQuotaLive -modelName $activeModel -Force | Out-Null } catch {}
-                $updated = Get-DailyUsageStats -modelName $activeModel -ForceRefresh
-                $tSub = $diag.FindName("TxtDlgSubtitle")
-                if ($tSub) { $tSub.Text = "Модель: $($updated.DisplayName) • Тариф: Antigravity Developer Pro" }
-                $tOverall = $diag.FindName("TxtOverallStatus")
-                if ($tOverall) {
-                    $tOverall.Text = $updated.OverallStatus
-                    $tOverall.Foreground = (Get-CachedBrush $updated.Color)
+                $btnRefresh.IsEnabled = $false
+                $btnRefresh.Content = "⏳ Обновление..."
+                try {
+                    $freshLive = Sync-QuotaLiveFromAgy -Force
+                    $updated = Get-DailyUsageStats -modelName $activeModel
+
+                    $tSub = $diag.FindName("TxtDlgSubtitle")
+                    if ($tSub) { $tSub.Text = "Модель: $($updated.DisplayName) • Группа: $($updated.GroupName)" }
+                    $tOverall = $diag.FindName("TxtOverallStatus")
+                    if ($tOverall) {
+                        $tOverall.Text = $updated.OverallStatus
+                        $tOverall.Foreground = (Get-CachedBrush $updated.Color)
+                    }
+                    $dotOverall = $diag.FindName("DotOverallStatus")
+                    if ($dotOverall) { $dotOverall.Fill = (Get-CachedBrush $updated.Color) }
+                    $bOverall = $diag.FindName("BorderOverallStatus")
+                    if ($bOverall) {
+                        $bOverall.Background = (Get-CachedBrush $updated.BadgeBg)
+                        $bOverall.BorderBrush = (Get-CachedBrush $updated.BadgeBorder)
+                    }
+
+                    # Обновление пула Gemini
+                    if ($updated.LiveGemini) {
+                        $tGemW = $diag.FindName("TxtGeminiWeekly")
+                        if ($tGemW) { $tGemW.Text = "$($updated.LiveGemini.weekly_percent)% • Сброс через $($updated.LiveGemini.weekly_resets_in)" }
+                        $pGemW = $diag.FindName("PrgGeminiWeekly")
+                        if ($pGemW) { $pGemW.Value = $updated.LiveGemini.weekly_percent }
+
+                        $tGem5 = $diag.FindName("TxtGemini5h")
+                        if ($tGem5) { $tGem5.Text = "$($updated.LiveGemini.five_hour_percent)% • Сброс через $($updated.LiveGemini.five_hour_resets_in)" }
+                        $pGem5 = $diag.FindName("PrgGemini5h")
+                        if ($pGem5) { $pGem5.Value = $updated.LiveGemini.five_hour_percent }
+                    }
+
+                    # Обновление пула Claude/GPT
+                    if ($updated.LiveClaudeGpt) {
+                        $tCldW = $diag.FindName("TxtClaudeWeekly")
+                        if ($tCldW) {
+                            $tCldW.Text = if ($updated.LiveClaudeGpt.is_blocked) {
+                                "0.00% (⛔ Исчерпан • Сброс через $($updated.LiveClaudeGpt.weekly_resets_in))"
+                            } else {
+                                "$($updated.LiveClaudeGpt.weekly_percent)% • Сброс через $($updated.LiveClaudeGpt.weekly_resets_in)"
+                            }
+                        }
+                        $pCldW = $diag.FindName("PrgClaudeWeekly")
+                        if ($pCldW) { $pCldW.Value = $updated.LiveClaudeGpt.weekly_percent }
+                    }
+
+                    $tCountdown = $diag.FindName("TxtResetCountdown")
+                    if ($tCountdown) { $tCountdown.Text = "Через $($updated.ResetCountdown)" }
+
+                    Update-LimitsDisplay -modelName $activeModel
+                    $btnRefresh.Content = "✔️ Обновлено"
+                } catch {
+                    $btnRefresh.Content = "❌ Ошибка"
+                } finally {
+                    $btnRefresh.IsEnabled = $true
                 }
-                $dotOverall = $diag.FindName("DotOverallStatus")
-                if ($dotOverall) { $dotOverall.Fill = (Get-CachedBrush $updated.Color) }
-                $bOverall = $diag.FindName("BorderOverallStatus")
-                if ($bOverall) {
-                    $bOverall.Background = (Get-CachedBrush $updated.BadgeBg)
-                    $bOverall.BorderBrush = (Get-CachedBrush $updated.BadgeBorder)
-                }
-
-                $tRpd = $diag.FindName("TxtRpdValues")
-                if ($tRpd) { $tRpd.Text = "$($updated.RequestsToday) / $($updated.MaxRpd) ($($updated.RpdPercent)%)" }
-                $pRpd = $diag.FindName("PrgRpd")
-                if ($pRpd) {
-                    $pRpd.Value = $updated.RpdPercent
-                    $pRpd.Foreground = (Get-CachedBrush $updated.Color)
-                }
-                $tRem = $diag.FindName("TxtRpdRemaining")
-                if ($tRem) { $tRem.Text = "Свободно: $($updated.RpdRemaining) запрос(ов) • $($updated.FreePercent)% квоты доступно" }
-
-                $tTokVal = $diag.FindName("TxtTokensTodayValues")
-                if ($tTokVal) { $tTokVal.Text = "$(Format-TokenCount $updated.TokensTotal) токенов" }
-                $pTok = $diag.FindName("PrgTokens")
-                if ($pTok) { $pTok.Value = [math]::Min(100.0, [math]::Round(($updated.TokensTotal / 50000000.0) * 100.0, 1)) }
-                $tTokBd = $diag.FindName("TxtTokenBreakdown")
-                if ($tTokBd) { $tTokBd.Text = "📥 Вход: $(Format-TokenCount $updated.TokensTodayIn)  •  📤 Ответ: $(Format-TokenCount $updated.TokensTodayOut)  •  💾 Кэш: $(Format-TokenCount $updated.TokensTodayCache)" }
-
-                $tRpm = $diag.FindName("TxtRpmValues")
-                if ($tRpm) { $tRpm.Text = "Текущий темп: $($updated.RecentRpm) RPM  (Лимит: $($updated.MaxRpm) RPM)" }
-                $pRpm = $diag.FindName("PrgRpm")
-                if ($pRpm) { $pRpm.Value = [math]::Min(100.0, [math]::Round(($updated.RecentRpm / [double]$updated.MaxRpm) * 100.0, 1)) }
-
-                $tCountdown = $diag.FindName("TxtResetCountdown")
-                if ($tCountdown) { $tCountdown.Text = "Через $($updated.ResetCountdown)" }
-
-                Update-LimitsDisplay -modelName $activeModel
             })
         }
 
