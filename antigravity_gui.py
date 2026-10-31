@@ -1585,9 +1585,26 @@ class AntigravityGUI(tk.Tk):
     def _show_usage_limits_dialog(self):
         """Открытие модального окна просмотра лимитов квот API."""
         try:
-            messagebox.showinfo("Лимиты использования API", "Статус квот: Все квоты в норме.\nПодробности доступны в основном WPF интерфейсе.")
+            self.lbl_status_text.config(text="Синхронизация квот Google AI Pro...")
+            self.root.config(cursor="watch")
+            self.root.update_idletasks()
+            active_m = self.var_model.get() if hasattr(self, "var_model") else "gemini-3.8-flash-high"
+            stats = get_daily_usage_stats(active_m)
+            msg = (
+                f"⚡ Лимиты и квоты API (Google AI Pro)\n\n"
+                f"Модель: {stats.get('display_name')}\n"
+                f"Группа: {stats.get('group_name')}\n"
+                f"Недельный лимит: {stats.get('weekly_percent')}%\n"
+                f"5-часовой лимит: {stats.get('five_hour_status')}\n"
+                f"Сброс недели: через {stats.get('reset_countdown')}\n"
+                f"Статус: {stats.get('overall_status')}"
+            )
+            messagebox.showinfo("Лимиты использования API (Google AI Pro)", msg)
         except Exception:
             pass
+        finally:
+            self.root.config(cursor="")
+            self.lbl_status_text.config(text="Готов к работе")
 
     def _show_context_details_dialog(self):
         """Открывает модальное диалоговое окно подробного анализа контекста."""

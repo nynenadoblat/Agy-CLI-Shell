@@ -3263,23 +3263,34 @@ function Show-UsageLimitsDialog {
         $OwnerWindow = $null
     )
     $activeModel = if ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-3.8-flash-high" }
-    $stats = Get-DailyUsageStats -modelName $activeModel -ForceRefresh
 
-    $gem = $stats.LiveGemini
-    $cld = $stats.LiveClaudeGpt
+    # Проверяем, свежий ли кэш (< 60 сек). Если нет, показываем оверлей загрузки на главном окне
+    $cacheFresh = ($global:LiveQuotaCache -and (([DateTime]::Now - $global:LiveQuotaCacheTime).TotalSeconds -lt 60))
+    if (-not $cacheFresh) {
+        if (Get-Command Show-LoadingOverlay -ErrorAction SilentlyContinue) {
+            Show-LoadingOverlay -Title "Синхронизация квот Google AI Pro..." -Subtitle "Опрос пулов моделей и лимитов API через Antigravity CLI..."
+            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+        }
+    }
 
-    $gemWeeklyPct = if ($gem) { [double]$gem.weekly_percent } else { 94.88 }
-    $gemWeeklyResets = if ($gem -and $gem.weekly_resets_in) { $gem.weekly_resets_in } else { "158ч 42м" }
-    $gem5hPct = if ($gem) { [double]$gem.five_hour_percent } else { 84.63 }
-    $gem5hResets = if ($gem -and $gem.five_hour_resets_in) { $gem.five_hour_resets_in } else { "3ч 41м" }
+    try {
+        $stats = Get-DailyUsageStats -modelName $activeModel -ForceRefresh:(-not $cacheFresh)
 
-    $cldWeeklyPct = if ($cld) { [double]$cld.weekly_percent } else { 0.0 }
-    $cldWeeklyResets = if ($cld -and $cld.weekly_resets_in) { $cld.weekly_resets_in } else { "95ч 31м" }
-    $cldBlocked = if ($cld) { [bool]$cld.is_blocked } else { $true }
+        $gem = $stats.LiveGemini
+        $cld = $stats.LiveClaudeGpt
 
-    $isGeminiActive = ($stats.GroupKey -eq "gemini")
+        $gemWeeklyPct = if ($gem) { [double]$gem.weekly_percent } else { 94.88 }
+        $gemWeeklyResets = if ($gem -and $gem.weekly_resets_in) { $gem.weekly_resets_in } else { "158ч 42м" }
+        $gem5hPct = if ($gem) { [double]$gem.five_hour_percent } else { 84.63 }
+        $gem5hResets = if ($gem -and $gem.five_hour_resets_in) { $gem.five_hour_resets_in } else { "3ч 41м" }
 
-    $dialogXaml = @"
+        $cldWeeklyPct = if ($cld) { [double]$cld.weekly_percent } else { 0.0 }
+        $cldWeeklyResets = if ($cld -and $cld.weekly_resets_in) { $cld.weekly_resets_in } else { "95ч 31м" }
+        $cldBlocked = if ($cld) { [bool]$cld.is_blocked } else { $true }
+
+        $isGeminiActive = ($stats.GroupKey -eq "gemini")
+
+        $dialogXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="⚡ Лимиты и квоты API (Google AI Pro)"
@@ -3455,11 +3466,26 @@ function Show-UsageLimitsDialog {
                         Padding="20,6" FontWeight="SemiBold" Cursor="Hand"/>
             </StackPanel>
         </DockPanel>
+
+        <!-- Внутренний оверлей загрузки при ручном обновлении -->
+        <Grid x:Name="DlgLoadingOverlay" Visibility="Collapsed" Background="#E6181A20" Grid.RowSpan="6">
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="#252528" BorderBrush="#007ACC" BorderThickness="1.5"
+                    CornerRadius="10" Padding="24,20" Width="340">
+                <Border.Effect>
+                    <DropShadowEffect Color="#007ACC" BlurRadius="25" ShadowDepth="0" Opacity="0.4"/>
+                </Border.Effect>
+                <StackPanel HorizontalAlignment="Center">
+                    <TextBlock Text="⚡" FontSize="26" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Text="Обновление квот API..." FontSize="14" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Опрос пулов моделей Google AI Pro..." FontSize="11" Foreground="#8B949E" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
 "@
 
-    try {
         $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
         $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
         if ($OwnerWindow) {
@@ -3501,7 +3527,10 @@ function Show-UsageLimitsDialog {
         if ($btnRefresh) {
             $btnRefresh.Add_Click({
                 $btnRefresh.IsEnabled = $false
-                $btnRefresh.Content = "⏳ Обновление..."
+                $dlgLoading = $diag.FindName("DlgLoadingOverlay")
+                if ($dlgLoading) { $dlgLoading.Visibility = [System.Windows.Visibility]::Visible }
+                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+
                 try {
                     $freshLive = Sync-QuotaLiveFromAgy -Force
                     $updated = Get-DailyUsageStats -modelName $activeModel
@@ -3556,17 +3585,28 @@ function Show-UsageLimitsDialog {
                 } catch {
                     $btnRefresh.Content = "❌ Ошибка"
                 } finally {
+                    if ($dlgLoading) { $dlgLoading.Visibility = [System.Windows.Visibility]::Collapsed }
                     $btnRefresh.IsEnabled = $true
+                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
                 }
             })
+        }
+
+        # Скрываем оверлей главного окна непосредственно перед открытием модального диалога
+        if (Get-Command Hide-LoadingOverlay -ErrorAction SilentlyContinue) {
+            Hide-LoadingOverlay
+            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
         }
 
         $diag.ShowDialog() | Out-Null
     } catch {
         [System.Windows.MessageBox]::Show($stats.ToolTipText, "⚡ Лимиты использования и квоты API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    } finally {
+        if (Get-Command Hide-LoadingOverlay -ErrorAction SilentlyContinue) {
+            Hide-LoadingOverlay
+        }
     }
 }
-
 function Get-ConversationPreviewText {
     param([string]$conversationId)
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
