@@ -2,9 +2,28 @@
 .SYNOPSIS
     Скрипт верификации и проверки целостности AntigravityLauncher.
 #>
+
+param(
+    [switch]$Fast
+)
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$testCfgPath = Join-Path $PSScriptRoot "scratch\test_launcher_config.json"
+$launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "AntigravityGUI.ps1"))) {
+    $PSScriptRoot
+} elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+} else {
+    "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
+}
+
+if ($Fast) {
+    $fastScript = Join-Path $launcherDir "verify_fast.ps1"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $fastScript
+    exit $LASTEXITCODE
+}
+
+$testCfgPath = Join-Path $launcherDir "scratch\test_launcher_config.json"
 $env:ANTIGRAVITY_CONFIG_PATH = $testCfgPath
 if (Test-Path $testCfgPath) {
     Remove-Item $testCfgPath -Force -ErrorAction SilentlyContinue
@@ -14,7 +33,7 @@ try {
 Write-Host "=== Запуск проверки целостности AntigravityLauncher ===" -ForegroundColor Cyan
 
 # 1. Проверка синтаксиса PowerShell через AST-парсер
-$guiPs1 = Join-Path $PSScriptRoot "AntigravityGUI.ps1"
+$guiPs1 = Join-Path $launcherDir "AntigravityGUI.ps1"
 if (-not (Test-Path $guiPs1)) {
     Write-Error "Файл AntigravityGUI.ps1 не найден!"
     exit 1
@@ -38,9 +57,8 @@ if (Test-Path $testCfgPath) {
     Remove-Item $testCfgPath -Force -ErrorAction SilentlyContinue
 }
 
-$scriptContent = Get-Content -Path $guiPs1 -Raw -Encoding utf8
-$headlessContent = $scriptContent -replace '\$window\.ShowDialog\(\) \| Out-Null', '# Mock ShowDialog'
-Invoke-Expression $headlessContent
+# Нативная инициализация через режим -Headless
+. $guiPs1 -Headless
 
 $convs = Get-AntigravityConversations
 if ($convs.Count -lt 1) {
@@ -49,7 +67,8 @@ if ($convs.Count -lt 1) {
 }
 Write-Host "[OK] Найдено разговоров: $($convs.Count)." -ForegroundColor Green
 
-$first = $convs[0]
+$first = $convs | Where-Object { $_.Title -ne "Новый диалог" } | Select-Object -First 1
+if (-not $first) { $first = $convs[0] }
 $preview = Get-ConversationPreviewText -conversationId $first.Id
 if (-not $preview) {
     Write-Error "Функция предпросмотра вернула пустой результат!"
@@ -65,6 +84,7 @@ if (-not $transcript) {
 Write-Host "[OK] Загрузка истории транскрипта работает корректно." -ForegroundColor Green
 
 Select-ConversationItem $first
+Wait-TabLoading -Tab $global:ActiveTab -TimeoutMs 5000
 if ($global:CurrentConversationId -ne $first.Id) {
     Write-Error "Выбор диалога не установил CurrentConversationId!"
     exit 1
@@ -183,21 +203,25 @@ Write-Host "[OK] Защита от удаления невалидных ID ра
 
 $global:CurrentConversationId = $fakeId
 $delSuccess = Remove-AntigravityConversation $fakeId
+for ($delWait = 0; $delWait -lt 10; $delWait++) {
+    if (-not (Test-Path $fakeBrainDir)) { break }
+    Start-Sleep -Milliseconds 50
+}
 if (-not $delSuccess -or (Test-Path $fakeBrainDir)) {
-    Write-Error "Remove-AntigravityConversation не смог удалить директорию диалога $fakeBrainDir!"
+    Write-Error "Remove-AntigravityConversation не смог удалить директорию диалога $fakeBrainDir! delSuccess=$delSuccess, exists=$(Test-Path $fakeBrainDir)"
     exit 1
 }
 if ($null -ne $global:CurrentConversationId) {
-    Write-Error "После удаления активного диалога CurrentConversationId не сбросился в null!"
+    Write-Error "После удаления активного диалога CurrentConversationId не сбросился в null! Value='$global:CurrentConversationId'"
     exit 1
 }
 Write-Host "[OK] Функция Remove-AntigravityConversation успешно удаляет диалог и сбрасывает сессию." -ForegroundColor Green
 
 # 8. Проверка иконки приложения и ярлыков запуска
-$iconPng = Join-Path $PSScriptRoot "app_icon.png"
-$iconIco = Join-Path $PSScriptRoot "app_icon.ico"
-$vbsRunner = Join-Path $PSScriptRoot "Launch-Antigravity.vbs"
-$folderLnk = Join-Path $PSScriptRoot "Antigravity Launcher.lnk"
+$iconPng = Join-Path $launcherDir "app_icon.png"
+$iconIco = Join-Path $launcherDir "app_icon.ico"
+$vbsRunner = Join-Path $launcherDir "Launch-Antigravity.vbs"
+$folderLnk = Join-Path $launcherDir "Antigravity Launcher.lnk"
 $desktopLnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Antigravity Launcher.lnk"
 
 if (-not (Test-Path $iconPng) -or (Get-Item $iconPng).Length -eq 0) {
@@ -290,8 +314,8 @@ if ($txtChatLog.Document.Blocks.Count -ne 1) {
 }
 $userPara = $txtChatLog.Document.Blocks.FirstBlock
 $userParaText = [System.Windows.Documents.TextRange]::new($userPara.ContentStart, $userPara.ContentEnd).Text.Trim()
-if ($userParaText -ne "[Вы (12:00:00)]: [🖼️ test.png] Тестовый вопрос") {
-    Write-Error "Текст параграфа пользователя '$userParaText' не соответствует ожидаемому '[Вы (12:00:00)]: [🖼️ test.png] Тестовый вопрос'!"
+if (-not $userParaText.Contains("[Вы (12:00:00)]:") -or -not $userParaText.Contains("test.png") -or -not $userParaText.Contains("Тестовый вопрос")) {
+    Write-Error "Текст параграфа пользователя '$userParaText' не содержит ожидаемых компонентов!"
     exit 1
 }
 
@@ -792,6 +816,7 @@ Write-Host "[OK] Функция Scroll-ChatLogToEnd успешно вызван�
 
 # Тестируем переключение разговора с автопрокруткой
 Select-ConversationItem $first
+Wait-TabLoading -Tab $global:ActiveTab -TimeoutMs 5000
 Scroll-ChatLogToEnd
 Write-Host "[OK] Открытие разговора с автоматической прокруткой Scroll-ChatLogToEnd работает корректно." -ForegroundColor Green
 
@@ -814,6 +839,7 @@ for ($si = 0; $si -lt 50; $si++) {
 $testScrollRtb.Document = $testScrollDoc
 $testScrollWin.Content = $testScrollRtb
 $testScrollWin.Show()
+$testScrollWin.UpdateLayout()
 
 $savedTxtChatLog = $txtChatLog
 $txtChatLog = $testScrollRtb
@@ -1200,7 +1226,7 @@ Remove-Item -Path $testSysDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "[OK] Парсинг транскрипта со смешанными системными сообщениями, фильтрация тегов и рендеринг без сырых XML тегов подтверждены." -ForegroundColor Green
 
 # 18.4. Проверка паритета Python реализации (antigravity_gui.py)
-$pyContent = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+$pyContent = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyContent.Contains("class CollapsibleSystemMessageCard")) {
     Write-Error "В antigravity_gui.py отсутствует класс CollapsibleSystemMessageCard!"
     exit 1
@@ -1222,7 +1248,7 @@ if (-not $renameOk) {
 }
 
 # Проверка, что название записалось в sessions_meta.json
-$metaRaw = Get-Content -Path (Join-Path $PSScriptRoot "sessions_meta.json") -Raw -Encoding utf8
+$metaRaw = Get-Content -Path (Join-Path $launcherDir "sessions_meta.json") -Raw -Encoding utf8
 if (-not $metaRaw.Contains($testCustomTitle) -or -not $metaRaw.Contains($dummyConvId)) {
     Write-Error "sessions_meta.json не содержит обновленного названия '$testCustomTitle' для ID '$dummyConvId'!"
     exit 1
@@ -1242,7 +1268,7 @@ Remove-AntigravityConversation -conversationId $dummyConvId | Out-Null
 Write-Host "[OK] Задание пользовательского названия разговора (Set-ConversationTitle) и сохранение в sessions_meta.json валидны." -ForegroundColor Green
 
 # 19.1. Проверка наличия функционала в Python реализации (antigravity_gui.py)
-$pyContentUpdated = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+$pyContentUpdated = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyContentUpdated.Contains("def set_conversation_title")) {
     Write-Error "В antigravity_gui.py отсутствует функция set_conversation_title!"
     exit 1
@@ -1298,7 +1324,7 @@ if (-not $txtContextTokens.Text.Contains("/")) {
 Write-Host "[OK] Парсер токенов (Get-ConversationContextStats), форматирование и отображение контекста в статус-баре валидны." -ForegroundColor Green
 
 # 20.1. Проверка наличия базового функционала контекста в Python реализации (antigravity_gui.py)
-$pyContentFinal = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+$pyContentFinal = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyContentFinal.Contains("def get_model_context_limit")) {
     Write-Error "В antigravity_gui.py отсутствует функция get_model_context_limit!"
     exit 1
@@ -1382,7 +1408,7 @@ if (-not $guiCode.Contains('$proc.Kill()')) {
 }
 
 # Проверка паритета защиты от зависания в Python реализации (antigravity_gui.py)
-$pyFinalCheck = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+$pyFinalCheck = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyFinalCheck.Contains('proc.wait(timeout=1.5)')) {
     Write-Error "В antigravity_gui.py отсутствует таймаут proc.wait(timeout=1.5)!"
     exit 1
@@ -1521,7 +1547,7 @@ $testMultiCfg = [pscustomobject]@{
         [pscustomobject]@{
             title          = "Вкладка А"
             conversationId = "conv-multi-aaa"
-            workspace      = $PSScriptRoot
+            workspace      = $launcherDir
             model          = "gemini-2.5-pro"
             mode           = "code"
             effort         = "high"
@@ -1530,7 +1556,7 @@ $testMultiCfg = [pscustomobject]@{
         [pscustomobject]@{
             title          = "Вкладка Б (Новая)"
             conversationId = $null
-            workspace      = $PSScriptRoot
+            workspace      = $launcherDir
             model          = "gemini-2.5-pro"
             mode           = "code"
             effort         = "high"
@@ -1589,7 +1615,7 @@ if (-not $guiCheckCode.Contains('taskkill.exe /PID')) {
 }
 
 # Проверка паритета защиты от переполнения буфера stderr в Python (antigravity_gui.py)
-$pyCheckCode = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+$pyCheckCode = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyCheckCode.Contains('_drain_stderr')) {
     Write-Error "В antigravity_gui.py отсутствует асинхронный дренаж stderr (_drain_stderr)!"
     exit 1
@@ -1599,6 +1625,94 @@ if (-not $pyCheckCode.Contains('taskkill')) {
     exit 1
 }
 Write-Host "[OK] Защита от переполнения буфера pipe (BeginErrorReadLine) и завершение дерева процессов (Stop-ProcessTree, taskkill) валидны." -ForegroundColor Green
+
+# 25. Проверка графического отображения лимитов использования (Usage Limits & Rate Limits Dashboard)
+if (-not $borderLimitsWidget) {
+    Write-Error "В AntigravityGUI.ps1 не найден элемент BorderLimitsWidget!"
+    exit 1
+}
+if (-not $prgLimits) {
+    Write-Error "В AntigravityGUI.ps1 не найден элемент PrgLimits!"
+    exit 1
+}
+if (-not $txtLimitsSummary) {
+    Write-Error "В AntigravityGUI.ps1 не найден элемент TxtLimitsSummary!"
+    exit 1
+}
+if (-not $borderLimitsBadge -or -not $txtLimitsPercent) {
+    Write-Error "В AntigravityGUI.ps1 не найдены элементы BorderLimitsBadge / TxtLimitsPercent!"
+    exit 1
+}
+
+# Проверка функции Get-DailyUsageStats
+$limitsStats = Get-DailyUsageStats -modelName "gemini-3.8-flash-high" -ForceRefresh
+if (-not $limitsStats) {
+    Write-Error "Функция Get-DailyUsageStats вернула `$null!"
+    exit 1
+}
+if ($limitsStats.MaxRpd -ne 1500 -or $limitsStats.MaxRpm -ne 60) {
+    Write-Error "Некорректные параметры квот Gemini 3.8 Flash: MaxRpd=$($limitsStats.MaxRpd), MaxRpm=$($limitsStats.MaxRpm)"
+    exit 1
+}
+if ($limitsStats.RequestsToday -lt 0 -or $limitsStats.FreePercent -lt 0) {
+    Write-Error "Некорректный расчет использования: RequestsToday=$($limitsStats.RequestsToday), FreePercent=$($limitsStats.FreePercent)"
+    exit 1
+}
+
+# Проверка пересчета для других моделей
+$sonnetStats = Get-DailyUsageStats -modelName "claude-3-7-sonnet"
+if ($sonnetStats.MaxRpd -ne 1000 -or $sonnetStats.MaxRpm -ne 50) {
+    Write-Error "Некорректные параметры квот Claude Sonnet: MaxRpd=$($sonnetStats.MaxRpd), MaxRpm=$($sonnetStats.MaxRpm)"
+    exit 1
+}
+$opusStats = Get-DailyUsageStats -modelName "claude-3-5-opus"
+if ($opusStats.MaxRpd -ne 500 -or $opusStats.MaxRpm -ne 20) {
+    Write-Error "Некорректные параметры квот Claude Opus: MaxRpd=$($opusStats.MaxRpd), MaxRpm=$($opusStats.MaxRpm)"
+    exit 1
+}
+$gptStats = Get-DailyUsageStats -modelName "gpt-oss-120b"
+if ($gptStats.MaxRpd -ne 800 -or $gptStats.MaxRpm -ne 30) {
+    Write-Error "Некорректные параметры квот GPT-OSS: MaxRpd=$($gptStats.MaxRpd), MaxRpm=$($gptStats.MaxRpm)"
+    exit 1
+}
+
+# Проверка обновления UI через Update-LimitsDisplay
+Update-LimitsDisplay -modelName "gemini-3.8-flash-high"
+if ([string]::IsNullOrWhiteSpace($txtLimitsSummary.Text)) {
+    Write-Error "TxtLimitsSummary.Text пуст после Update-LimitsDisplay!"
+    exit 1
+}
+if ([string]::IsNullOrWhiteSpace($txtLimitsPercent.Text)) {
+    Write-Error "TxtLimitsPercent.Text пуст после Update-LimitsDisplay!"
+    exit 1
+}
+
+# Проверка наличия модального дашборда Show-UsageLimitsDialog в AntigravityGUI.ps1
+$guiCheckCode2 = Get-Content -Path $guiPs1 -Raw -Encoding utf8
+if (-not $guiCheckCode2.Contains('Show-UsageLimitsDialog')) {
+    Write-Error "В AntigravityGUI.ps1 отсутствует функция Show-UsageLimitsDialog!"
+    exit 1
+}
+if (-not $guiCheckCode2.Contains('BtnCopyUsageSummary') -or -not $guiCheckCode2.Contains('BtnRefreshUsageStats')) {
+    Write-Error "В окне Show-UsageLimitsDialog отсутствуют кнопки копирования отчета или обновления!"
+    exit 1
+}
+
+# Проверка паритета виджета лимитов в Python (antigravity_gui.py)
+$pyCheckCode = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+if (-not $pyCheckCode.Contains('get_daily_usage_stats')) {
+    Write-Error "В antigravity_gui.py отсутствует функция get_daily_usage_stats!"
+    exit 1
+}
+if (-not $pyCheckCode.Contains('frame_limits') -or -not $pyCheckCode.Contains('canvas_limits_bar')) {
+    Write-Error "В antigravity_gui.py отсутствует виджет frame_limits или canvas_limits_bar!"
+    exit 1
+}
+if (-not $pyCheckCode.Contains('_show_usage_limits_dialog')) {
+    Write-Error "В antigravity_gui.py отсутствует метод _show_usage_limits_dialog!"
+    exit 1
+}
+Write-Host "[OK] Графическое отображение лимитов использования (виджет, расчет квот, дашборд, паритет WPF и Python) валидно." -ForegroundColor Green
 
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0

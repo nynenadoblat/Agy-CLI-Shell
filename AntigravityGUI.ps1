@@ -7,6 +7,14 @@
     Поддерживает потоковый вывод (streaming) токенов, контекст сессий, выбор моделей и проектов.
 #>
 
+param(
+    [switch]$Headless,
+    [switch]$ValidateOnly
+)
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
 
 trap {
@@ -14,9 +22,13 @@ trap {
     try {
         $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher\launcher_error.log" }
         [System.IO.File]::WriteAllText($logF, $errText, [System.Text.Encoding]::UTF8)
-        [System.Windows.MessageBox]::Show($errText, "Ошибка запуска Antigravity Launcher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        if (-not ($Headless -or $ValidateOnly)) {
+            [System.Windows.MessageBox]::Show($errText, "Ошибка запуска Antigravity Launcher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        } else {
+            [Console]::Error.WriteLine($errText)
+        }
     } catch {}
-    return
+    exit 1
 }
 
 # --- Определение расположения исполняемого файла agy.exe ---
@@ -6064,5 +6076,11 @@ $window.Add_Closing({
 })
 
 # Показ главного окна
+if ($Headless -or $ValidateOnly) {
+    Write-Host "[OK] Antigravity GUI успешно инициализирован (Headless mode). Открытых вкладок: $($global:TabsList.Count)"
+    $uiTimer.Stop()
+    return
+}
+
 $window.ShowDialog() | Out-Null
 $uiTimer.Stop()
