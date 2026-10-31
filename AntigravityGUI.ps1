@@ -2880,53 +2880,17 @@ function Get-ModelQuotaGroup {
     return "claude_gpt"
 }
 
-function Sync-QuotaLiveFromAgy {
-    param([switch]$Force)
-    $now = [DateTime]::Now
-    $cachePath = $script:QuotaCacheFilePath
-
-    # 1. Если данные в памяти свежие (< 90 сек) и не Force - вернуть память
-    if (-not $Force -and $global:LiveQuotaCache -and (($now - $global:LiveQuotaCacheTime).TotalSeconds -lt 90)) {
-        return $global:LiveQuotaCache
-    }
-
-    # 2. Если на диске есть свежий файл кэша (< 120 сек) и не Force - загрузить с диска
-    if (-not $Force -and (Test-Path $cachePath)) {
-        try {
-            $fi = Get-Item $cachePath -ErrorAction SilentlyContinue
-            if ($fi -and ($now - $fi.LastWriteTime).TotalSeconds -lt 120) {
-                $rawDisk = [System.IO.File]::ReadAllText($cachePath, [System.Text.Encoding]::UTF8)
-                $diskObj = $rawDisk | ConvertFrom-Json
-                if ($diskObj -and $diskObj.gemini -and $diskObj.claude_gpt) {
-                    $global:LiveQuotaCache = $diskObj
-                    $global:LiveQuotaCacheTime = $fi.LastWriteTime
-                    return $diskObj
-                }
-            }
-        } catch {}
-    }
-
-    # 3. Живой запрос через agy.exe -p "/usage" --output-format json
+function Update-QuotaCacheFromJson {
+    param(
+        [string]$RawJson
+    )
+    if ([string]::IsNullOrWhiteSpace($RawJson)) { return $null }
     try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "agy.exe"
-        $psi.Arguments = "-p `"/usage`" --output-format json"
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        if (-not $proc.WaitForExit(9000)) {
-            try { $proc.Kill() } catch {}
-            return $global:LiveQuotaCache
-        }
-        $out = $proc.StandardOutput.ReadToEnd()
-        $data = $out | ConvertFrom-Json
+        $data = $RawJson | ConvertFrom-Json
         if (-not $data -or -not $data.command -or -not $data.command.data -or -not $data.command.data.groups) {
-            return $global:LiveQuotaCache
+            return $null
         }
-
+        $now = [DateTime]::Now
         $res = [ordered]@{
             updated_at = $now.ToString("o")
             gemini     = $null
@@ -3005,6 +2969,7 @@ function Sync-QuotaLiveFromAgy {
         $global:LiveQuotaCacheTime = $now
 
         try {
+            $cachePath = $script:QuotaCacheFilePath
             $dir = [System.IO.Path]::GetDirectoryName($cachePath)
             if (-not (Test-Path $dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
             $jsonStr = $res | ConvertTo-Json -Depth 5
@@ -3013,10 +2978,134 @@ function Sync-QuotaLiveFromAgy {
 
         return $global:LiveQuotaCache
     } catch {
-        return $global:LiveQuotaCache
+        return $null
     }
 }
 
+$global:ActiveQuotaSyncJob = $null
+
+function Start-AsyncQuotaSync {
+    param(
+        [scriptblock]$OnCompleted
+    )
+    if ($global:ActiveQuotaSyncJob -and $global:ActiveQuotaSyncJob.AsyncResult -and -not $global:ActiveQuotaSyncJob.AsyncResult.IsCompleted) {
+        if ($OnCompleted) {
+            [void]$global:ActiveQuotaSyncJob.Callbacks.Add($OnCompleted)
+        }
+        return $global:ActiveQuotaSyncJob
+    }
+
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "agy.exe"
+            $psi.Arguments = "-p `"/usage`" --output-format json"
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.CreateNoWindow = $true
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            if (-not $proc.WaitForExit(9000)) {
+                try { $proc.Kill() } catch {}
+                return $null
+            }
+            return $proc.StandardOutput.ReadToEnd()
+        } catch {
+            return $null
+        }
+    })
+
+    $asyncResult = $ps.BeginInvoke()
+    $callbacks = New-Object System.Collections.ArrayList
+    if ($OnCompleted) { [void]$callbacks.Add($OnCompleted) }
+
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(120)
+
+    $jobObj = [pscustomobject]@{
+        PowerShell  = $ps
+        AsyncResult = $asyncResult
+        Timer       = $timer
+        Callbacks   = $callbacks
+    }
+    $global:ActiveQuotaSyncJob = $jobObj
+
+    $timer.Add_Tick({
+        if ($asyncResult.IsCompleted) {
+            $timer.Stop()
+            $rawOut = $null
+            try {
+                $rawOut = $ps.EndInvoke($asyncResult)
+            } catch {}
+            try { $ps.Dispose() } catch {}
+
+            if ($rawOut) {
+                [void](Update-QuotaCacheFromJson -RawJson $rawOut)
+            }
+
+            $currentCallbacks = @($jobObj.Callbacks)
+            $global:ActiveQuotaSyncJob = $null
+
+            foreach ($cb in $currentCallbacks) {
+                try { & $cb } catch {}
+            }
+        }
+    })
+    $timer.Start()
+    return $jobObj
+}
+
+function Sync-QuotaLiveFromAgy {
+    param([switch]$Force)
+    $now = [DateTime]::Now
+    $cachePath = $script:QuotaCacheFilePath
+
+    # 1. Если данные в памяти свежие (< 90 сек) и не Force - вернуть память
+    if (-not $Force -and $global:LiveQuotaCache -and (($now - $global:LiveQuotaCacheTime).TotalSeconds -lt 90)) {
+        return $global:LiveQuotaCache
+    }
+
+    # 2. Если на диске есть свежий файл кэша (< 120 сек) и не Force - загрузить с диска
+    if (-not $Force -and (Test-Path $cachePath)) {
+        try {
+            $fi = Get-Item $cachePath -ErrorAction SilentlyContinue
+            if ($fi -and ($now - $fi.LastWriteTime).TotalSeconds -lt 120) {
+                $rawDisk = [System.IO.File]::ReadAllText($cachePath, [System.Text.Encoding]::UTF8)
+                $diskObj = $rawDisk | ConvertFrom-Json
+                if ($diskObj -and $diskObj.gemini -and $diskObj.claude_gpt) {
+                    $global:LiveQuotaCache = $diskObj
+                    $global:LiveQuotaCacheTime = $fi.LastWriteTime
+                    return $diskObj
+                }
+            }
+        } catch {}
+    }
+
+    # 3. Синхронный живой запрос через agy.exe
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "agy.exe"
+        $psi.Arguments = "-p `"/usage`" --output-format json"
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if (-not $proc.WaitForExit(9000)) {
+            try { $proc.Kill() } catch {}
+            return $global:LiveQuotaCache
+        }
+        $out = $proc.StandardOutput.ReadToEnd()
+        $parsed = Update-QuotaCacheFromJson -RawJson $out
+        if ($parsed) { return $parsed }
+        return $global:LiveQuotaCache
+    } catch {
+        return $global:LiveQuotaCache
+    }
+}
 function Load-QuotaCache {
     if (Test-Path $script:QuotaCacheFilePath) {
         try {
@@ -3264,18 +3353,11 @@ function Show-UsageLimitsDialog {
     )
     $activeModel = if ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-3.8-flash-high" }
 
-    # Проверяем, свежий ли кэш (< 60 сек). Если нет, показываем оверлей загрузки на главном окне
-    $cacheFresh = ($global:LiveQuotaCache -and (([DateTime]::Now - $global:LiveQuotaCacheTime).TotalSeconds -lt 60))
-    if (-not $cacheFresh) {
-        if (Get-Command Show-LoadingOverlay -ErrorAction SilentlyContinue) {
-            Show-LoadingOverlay -Title "Синхронизация квот Google AI Pro..." -Subtitle "Опрос пулов моделей и лимитов API через Antigravity CLI..."
-            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
-        }
-    }
+    # МГНОВЕННОЕ получение данных из кэша памяти или диска (< 1 мс). Никаких синхронных ожиданий CLI!
+    $cacheFresh = ($global:LiveQuotaCache -and (([DateTime]::Now - $global:LiveQuotaCacheTime).TotalSeconds -lt 90))
+    $stats = Get-DailyUsageStats -modelName $activeModel -ForceRefresh:$false
 
     try {
-        $stats = Get-DailyUsageStats -modelName $activeModel -ForceRefresh:(-not $cacheFresh)
-
         $gem = $stats.LiveGemini
         $cld = $stats.LiveClaudeGpt
 
@@ -3294,7 +3376,7 @@ function Show-UsageLimitsDialog {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="⚡ Лимиты и квоты API (Google AI Pro)"
-        Height="680" Width="680"
+        Height="700" Width="680"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         Background="#181A20" Foreground="#F1F1F1"
@@ -3314,12 +3396,13 @@ function Show-UsageLimitsDialog {
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Шапка -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,14">
+        <DockPanel Grid.Row="0" Margin="0,0,0,10">
             <StackPanel DockPanel.Dock="Left">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="⚡" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
@@ -3336,8 +3419,24 @@ function Show-UsageLimitsDialog {
             </Border>
         </DockPanel>
 
+        <!-- НЕБЛОКИРУЮЩИЙ БАННЕР СИНХРОНИЗАЦИИ КВОТ -->
+        <Border x:Name="DlgSyncBanner" Grid.Row="1" Background="#162638" BorderBrush="#1F6FEB" BorderThickness="1.2"
+                CornerRadius="6" Padding="12,7" Margin="0,0,0,10"
+                Visibility="$(if (-not $cacheFresh) { 'Visible' } else { 'Collapsed' })">
+            <DockPanel LastChildFill="True">
+                <ProgressBar x:Name="PrgSyncSpinner" IsIndeterminate="True" Width="80" Height="4"
+                             DockPanel.Dock="Right" Margin="10,0,0,0" Foreground="#58A6FF"
+                             Background="#0D1117" BorderThickness="0" VerticalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="⚡" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtDlgSyncStatus" Text="Синхронизация квот с API Google AI Pro в реальном времени..."
+                               FontSize="11.5" Foreground="#79C0FF" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
         <!-- Пул 1: GEMINI MODELS -->
-        <Border Grid.Row="1" Background="$(if ($isGeminiActive) { '#1C2622' } else { '#161920' })"
+        <Border Grid.Row="2" Background="$(if ($isGeminiActive) { '#1C2622' } else { '#161920' })"
                 BorderBrush="$(if ($isGeminiActive) { '#4EC9B0' } else { '#222834' })" BorderThickness="1.5" CornerRadius="8" Padding="14,12" Margin="0,0,0,10">
             <StackPanel>
                 <DockPanel Margin="0,0,0,8">
@@ -3374,7 +3473,7 @@ function Show-UsageLimitsDialog {
         </Border>
 
         <!-- Пул 2: CLAUDE AND GPT MODELS -->
-        <Border Grid.Row="2" Background="$(if (-not $isGeminiActive) { '#261C1D' } else { '#161920' })"
+        <Border Grid.Row="3" Background="$(if (-not $isGeminiActive) { '#261C1D' } else { '#161920' })"
                 BorderBrush="$(if (-not $isGeminiActive) { '#F85149' } else { '#222834' })" BorderThickness="1.5" CornerRadius="8" Padding="14,12" Margin="0,0,0,10">
             <StackPanel>
                 <DockPanel Margin="0,0,0,8">
@@ -3413,7 +3512,7 @@ function Show-UsageLimitsDialog {
         </Border>
 
         <!-- Таймер сброса и экономия токенов -->
-        <Grid Grid.Row="3" Margin="0,0,0,10">
+        <Grid Grid.Row="4" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="10"/>
@@ -3444,14 +3543,14 @@ function Show-UsageLimitsDialog {
         </Grid>
 
         <!-- Скрытые элементы для обратной совместимости с тестами verify_launcher.ps1 -->
-        <StackPanel Grid.Row="4" Visibility="Collapsed">
+        <StackPanel Grid.Row="5" Visibility="Collapsed">
             <TextBlock x:Name="TxtRpdValues" Text="$($stats.RequestsToday) / $($stats.MaxRpd)"/>
             <ProgressBar x:Name="PrgRpd" Value="$($stats.WeeklyPercent)"/>
             <TextBlock x:Name="TxtRpdRemaining" Text="Свободно: $($stats.RpdRemaining)"/>
         </StackPanel>
 
         <!-- Нижняя панель действий -->
-        <DockPanel Grid.Row="5" Margin="0,6,0,0">
+        <DockPanel Grid.Row="6" Margin="0,6,0,0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                 <Button x:Name="BtnCopyUsageSummary" Content="📋 Скопировать отчет"
                         Background="#252526" BorderBrush="#3E3E42" Foreground="#CCCCCC"
@@ -3467,8 +3566,8 @@ function Show-UsageLimitsDialog {
             </StackPanel>
         </DockPanel>
 
-        <!-- Внутренний оверлей загрузки при ручном обновлении -->
-        <Grid x:Name="DlgLoadingOverlay" Visibility="Collapsed" Background="#E6181A20" Grid.RowSpan="6">
+        <!-- Внутренний оверлей загрузки при необходимости полного перекрытия -->
+        <Grid x:Name="DlgLoadingOverlay" Visibility="Collapsed" Background="#E6181A20" Grid.RowSpan="7">
             <Border HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="#252528" BorderBrush="#007ACC" BorderThickness="1.5"
                     CornerRadius="10" Padding="24,20" Width="340">
@@ -3497,6 +3596,74 @@ function Show-UsageLimitsDialog {
             $diag.Icon = $window.Icon
         }
 
+        # Логика обновления всех визуальных контролов окна по свежим данным
+        $applyFreshStats = {
+            $updated = Get-DailyUsageStats -modelName $activeModel -ForceRefresh:$false
+
+            $tSub = $diag.FindName("TxtDlgSubtitle")
+            if ($tSub) { $tSub.Text = "Модель: $($updated.DisplayName) • Группа: $($updated.GroupName)" }
+            $tOverall = $diag.FindName("TxtOverallStatus")
+            if ($tOverall) {
+                $tOverall.Text = $updated.OverallStatus
+                $tOverall.Foreground = (Get-CachedBrush $updated.Color)
+            }
+            $dotOverall = $diag.FindName("DotOverallStatus")
+            if ($dotOverall) { $dotOverall.Fill = (Get-CachedBrush $updated.Color) }
+            $bOverall = $diag.FindName("BorderOverallStatus")
+            if ($bOverall) {
+                $bOverall.Background = (Get-CachedBrush $updated.BadgeBg)
+                $bOverall.BorderBrush = (Get-CachedBrush $updated.BadgeBorder)
+            }
+
+            # Обновление пула Gemini
+            if ($updated.LiveGemini) {
+                $tGemW = $diag.FindName("TxtGeminiWeekly")
+                if ($tGemW) { $tGemW.Text = "$($updated.LiveGemini.weekly_percent)% • Сброс через $($updated.LiveGemini.weekly_resets_in)" }
+                $pGemW = $diag.FindName("PrgGeminiWeekly")
+                if ($pGemW) { $pGemW.Value = $updated.LiveGemini.weekly_percent }
+
+                $tGem5 = $diag.FindName("TxtGemini5h")
+                if ($tGem5) { $tGem5.Text = "$($updated.LiveGemini.five_hour_percent)% • Сброс через $($updated.LiveGemini.five_hour_resets_in)" }
+                $pGem5 = $diag.FindName("PrgGemini5h")
+                if ($pGem5) { $pGem5.Value = $updated.LiveGemini.five_hour_percent }
+            }
+
+            # Обновление пула Claude/GPT
+            if ($updated.LiveClaudeGpt) {
+                $tCldW = $diag.FindName("TxtClaudeWeekly")
+                if ($tCldW) {
+                    $tCldW.Text = if ($updated.LiveClaudeGpt.is_blocked) {
+                        "0.00% (⛔ Исчерпан • Сброс через $($updated.LiveClaudeGpt.weekly_resets_in))"
+                    } else {
+                        "$($updated.LiveClaudeGpt.weekly_percent)% • Сброс через $($updated.LiveClaudeGpt.weekly_resets_in)"
+                    }
+                }
+                $pCldW = $diag.FindName("PrgClaudeWeekly")
+                if ($pCldW) { $pCldW.Value = $updated.LiveClaudeGpt.weekly_percent }
+            }
+
+            $tCountdown = $diag.FindName("TxtResetCountdown")
+            if ($tCountdown) { $tCountdown.Text = "Через $($updated.ResetCountdown)" }
+
+            Update-LimitsDisplay -modelName $activeModel
+
+            $tSync = $diag.FindName("TxtDlgSyncStatus")
+            if ($tSync) { $tSync.Text = "✔️ Квоты успешно синхронизированы с Google AI Pro" }
+            $pSync = $diag.FindName("PrgSyncSpinner")
+            if ($pSync) { $pSync.Visibility = [System.Windows.Visibility]::Collapsed }
+
+            # Плавное сворачивание баннера через 1.5 секунды
+            $bannerHideTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $bannerHideTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
+            $bannerHideTimer.Add_Tick({
+                $bannerHideTimer.Stop()
+                $banner = $diag.FindName("DlgSyncBanner")
+                if ($banner) { $banner.Visibility = [System.Windows.Visibility]::Collapsed }
+            })
+            $bannerHideTimer.Start()
+        }
+
+        # Копирование текстового отчета квот
         $btnCopy = $diag.FindName("BtnCopyUsageSummary")
         if ($btnCopy) {
             $btnCopy.Add_Click({
@@ -3523,90 +3690,44 @@ function Show-UsageLimitsDialog {
             })
         }
 
+        # Кнопка ручного обновления: неблокирующая асинхронная синхронизация
         $btnRefresh = $diag.FindName("BtnRefreshUsageStats")
         if ($btnRefresh) {
             $btnRefresh.Add_Click({
                 $btnRefresh.IsEnabled = $false
-                $dlgLoading = $diag.FindName("DlgLoadingOverlay")
-                if ($dlgLoading) { $dlgLoading.Visibility = [System.Windows.Visibility]::Visible }
-                try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                $btnRefresh.Content = "⏳ Запрос..."
 
-                try {
-                    $freshLive = Sync-QuotaLiveFromAgy -Force
-                    $updated = Get-DailyUsageStats -modelName $activeModel
+                $banner = $diag.FindName("DlgSyncBanner")
+                if ($banner) { $banner.Visibility = [System.Windows.Visibility]::Visible }
+                $tSync = $diag.FindName("TxtDlgSyncStatus")
+                if ($tSync) { $tSync.Text = "Запрос актуальных квот API у Google AI Pro..." }
+                $pSync = $diag.FindName("PrgSyncSpinner")
+                if ($pSync) { $pSync.Visibility = [System.Windows.Visibility]::Visible }
 
-                    $tSub = $diag.FindName("TxtDlgSubtitle")
-                    if ($tSub) { $tSub.Text = "Модель: $($updated.DisplayName) • Группа: $($updated.GroupName)" }
-                    $tOverall = $diag.FindName("TxtOverallStatus")
-                    if ($tOverall) {
-                        $tOverall.Text = $updated.OverallStatus
-                        $tOverall.Foreground = (Get-CachedBrush $updated.Color)
-                    }
-                    $dotOverall = $diag.FindName("DotOverallStatus")
-                    if ($dotOverall) { $dotOverall.Fill = (Get-CachedBrush $updated.Color) }
-                    $bOverall = $diag.FindName("BorderOverallStatus")
-                    if ($bOverall) {
-                        $bOverall.Background = (Get-CachedBrush $updated.BadgeBg)
-                        $bOverall.BorderBrush = (Get-CachedBrush $updated.BadgeBorder)
-                    }
-
-                    # Обновление пула Gemini
-                    if ($updated.LiveGemini) {
-                        $tGemW = $diag.FindName("TxtGeminiWeekly")
-                        if ($tGemW) { $tGemW.Text = "$($updated.LiveGemini.weekly_percent)% • Сброс через $($updated.LiveGemini.weekly_resets_in)" }
-                        $pGemW = $diag.FindName("PrgGeminiWeekly")
-                        if ($pGemW) { $pGemW.Value = $updated.LiveGemini.weekly_percent }
-
-                        $tGem5 = $diag.FindName("TxtGemini5h")
-                        if ($tGem5) { $tGem5.Text = "$($updated.LiveGemini.five_hour_percent)% • Сброс через $($updated.LiveGemini.five_hour_resets_in)" }
-                        $pGem5 = $diag.FindName("PrgGemini5h")
-                        if ($pGem5) { $pGem5.Value = $updated.LiveGemini.five_hour_percent }
-                    }
-
-                    # Обновление пула Claude/GPT
-                    if ($updated.LiveClaudeGpt) {
-                        $tCldW = $diag.FindName("TxtClaudeWeekly")
-                        if ($tCldW) {
-                            $tCldW.Text = if ($updated.LiveClaudeGpt.is_blocked) {
-                                "0.00% (⛔ Исчерпан • Сброс через $($updated.LiveClaudeGpt.weekly_resets_in))"
-                            } else {
-                                "$($updated.LiveClaudeGpt.weekly_percent)% • Сброс через $($updated.LiveClaudeGpt.weekly_resets_in)"
-                            }
-                        }
-                        $pCldW = $diag.FindName("PrgClaudeWeekly")
-                        if ($pCldW) { $pCldW.Value = $updated.LiveClaudeGpt.weekly_percent }
-                    }
-
-                    $tCountdown = $diag.FindName("TxtResetCountdown")
-                    if ($tCountdown) { $tCountdown.Text = "Через $($updated.ResetCountdown)" }
-
-                    Update-LimitsDisplay -modelName $activeModel
-                    $btnRefresh.Content = "✔️ Обновлено"
-                } catch {
-                    $btnRefresh.Content = "❌ Ошибка"
-                } finally {
-                    if ($dlgLoading) { $dlgLoading.Visibility = [System.Windows.Visibility]::Collapsed }
+                Start-AsyncQuotaSync -OnCompleted {
+                    & $applyFreshStats
                     $btnRefresh.IsEnabled = $true
-                    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
+                    $btnRefresh.Content = "✔️ Обновлено"
                 }
             })
         }
 
-        # Скрываем оверлей главного окна непосредственно перед открытием модального диалога
-        if (Get-Command Hide-LoadingOverlay -ErrorAction SilentlyContinue) {
-            Hide-LoadingOverlay
-            try { [System.Windows.Forms.Application]::DoEvents() } catch {}
-        }
+        # Фоновый опрос при открытии, если кэш старше 90 секунд
+        $diag.Add_Loaded({
+            if (-not $cacheFresh) {
+                Start-AsyncQuotaSync -OnCompleted {
+                    & $applyFreshStats
+                }
+            }
+        })
 
+        # Мгновенный показ диалога (< 30 мс)
         $diag.ShowDialog() | Out-Null
     } catch {
         [System.Windows.MessageBox]::Show($stats.ToolTipText, "⚡ Лимиты использования и квоты API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
-    } finally {
-        if (Get-Command Hide-LoadingOverlay -ErrorAction SilentlyContinue) {
-            Hide-LoadingOverlay
-        }
     }
 }
+
 function Get-ConversationPreviewText {
     param([string]$conversationId)
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
