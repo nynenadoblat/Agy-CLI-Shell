@@ -661,6 +661,938 @@ function Get-AttachmentsDirectory {
     return $targetDir
 }
 
+function New-ArrowGeometry {
+    param(
+        [double]$x1, [double]$y1,
+        [double]$x2, [double]$y2,
+        [double]$headLength = 26.0,
+        [double]$headWidth = 13.0
+    )
+    $dx = $x2 - $x1
+    $dy = $y2 - $y1
+    $len = [math]::Sqrt($dx * $dx + $dy * $dy)
+    if ($len -lt 2.0) { return $null }
+
+    $ux = $dx / $len
+    $uy = $dy / $len
+    $nx = -$uy
+    $ny = $ux
+
+    $headLen = [math]::Min($headLength, $len * 0.7)
+    $bx = $x2 - $ux * $headLen
+    $by = $y2 - $uy * $headLen
+
+    $p1x = $bx + $nx * $headWidth
+    $p1y = $by + $ny * $headWidth
+    $p2x = $bx - $nx * $headWidth
+    $p2y = $by - $ny * $headWidth
+
+    $geom = [System.Windows.Media.StreamGeometry]::new()
+    $ctx = $geom.Open()
+    $ctx.BeginFigure([System.Windows.Point]::new($x1, $y1), $false, $false)
+    $ctx.LineTo([System.Windows.Point]::new($bx, $by), $true, $true)
+    $ctx.BeginFigure([System.Windows.Point]::new($x2, $y2), $true, $true)
+    $ctx.LineTo([System.Windows.Point]::new($p1x, $p1y), $true, $true)
+    $ctx.LineTo([System.Windows.Point]::new($p2x, $p2y), $true, $true)
+    $ctx.Close()
+    $geom.Freeze()
+    return $geom
+}
+
+function Show-ImageViewerWindow {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [string]$Title = "",
+        [psobject]$AttachedItem = $null
+    )
+    if ([string]::IsNullOrWhiteSpace($FilePath)) { return }
+
+    # Интеллектуальный поиск физического файла
+    $targetPath = $FilePath
+    if (-not (Test-Path $targetPath)) {
+        $fn = [System.IO.Path]::GetFileName($FilePath)
+        $candidates = @(
+            (Join-Path $launcherDir "attachments\$fn"),
+            (if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" })
+        )
+        $found = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+        if ($found) {
+            $targetPath = $found
+        } else {
+            [System.Windows.MessageBox]::Show("Файл изображения не найден на диске:`n$FilePath", "Изображение недоступно", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+            return
+        }
+    }
+
+    try {
+        $bi = [System.Windows.Media.Imaging.BitmapImage]::new()
+        $bi.BeginInit()
+        $bi.UriSource = [System.Uri]::new((Convert-Path $targetPath))
+        $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        $bi.EndInit()
+        $bi.Freeze()
+    } catch {
+        [System.Windows.MessageBox]::Show("Не удалось загрузить изображение:`n$($_.ToString())", "Ошибка открытия", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        return
+    }
+
+    $fileName = [System.IO.Path]::GetFileName($targetPath)
+    $dispTitle = if ($Title) { $Title } else { $fileName }
+    $fileInfo = Get-Item $targetPath -ErrorAction SilentlyContinue
+    $fileSizeKB = if ($fileInfo) { [math]::Round($fileInfo.Length / 1024) } else { 0 }
+    $w = [math]::Round($bi.PixelWidth)
+    $h = [math]::Round($bi.PixelHeight)
+    $baseThickness = [math]::Max(3.0, [math]::Round($w / 350.0))
+
+    # Создание окна просмотра
+    $viewer = [System.Windows.Window]::new()
+    $viewer.Title = "Просмотр изображения: $dispTitle ($w × $h)"
+    $viewer.Width = [math]::Min(1200, [math]::Max(800, $w + 80))
+    $viewer.Height = [math]::Min(880, [math]::Max(580, $h + 170))
+    $viewer.MinWidth = 650
+    $viewer.MinHeight = 480
+    $viewer.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterOwner
+    if ($window -and $window.IsVisible) {
+        $viewer.Owner = $window
+    }
+    $viewer.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161A22")
+    $viewer.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E6EDF3")
+
+    $rootGrid = [System.Windows.Controls.Grid]::new()
+    $rowTop = [System.Windows.Controls.RowDefinition]::new()
+    $rowTop.Height = [System.Windows.GridLength]::new(44, [System.Windows.GridUnitType]::Pixel)
+    $rowTools = [System.Windows.Controls.RowDefinition]::new()
+    $rowTools.Height = [System.Windows.GridLength]::new(40, [System.Windows.GridUnitType]::Pixel)
+    $rowCenter = [System.Windows.Controls.RowDefinition]::new()
+    $rowCenter.Height = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star)
+    $rowBottom = [System.Windows.Controls.RowDefinition]::new()
+    $rowBottom.Height = [System.Windows.GridLength]::new(36, [System.Windows.GridUnitType]::Pixel)
+
+    $rootGrid.RowDefinitions.Add($rowTop)
+    $rootGrid.RowDefinitions.Add($rowTools)
+    $rootGrid.RowDefinitions.Add($rowCenter)
+    $rootGrid.RowDefinitions.Add($rowBottom)
+
+    # 1. Верхняя панель (Заголовок, метаданные и системные действия)
+    $topBar = [System.Windows.Controls.Border]::new()
+    $topBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F242C")
+    $topBar.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $topBar.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
+    $topBar.Padding = [System.Windows.Thickness]::new(14, 0, 14, 0)
+    [System.Windows.Controls.Grid]::SetRow($topBar, 0)
+
+    $topGrid = [System.Windows.Controls.DockPanel]::new()
+    $topGrid.LastChildFill = $true
+
+    $pnlActions = [System.Windows.Controls.StackPanel]::new()
+    $pnlActions.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+    [System.Windows.Controls.DockPanel]::SetDock($pnlActions, [System.Windows.Controls.Dock]::Right)
+
+    $btnSys = [System.Windows.Controls.Button]::new()
+    $btnSys.Content = "🖼️ В системе"
+    $btnSys.ToolTip = "Открыть во внешнем системном просмотрщике Windows"
+    $btnSys.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#238636")
+    $btnSys.Foreground = [System.Windows.Media.Brushes]::White
+    $btnSys.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnSys.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $btnSys.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
+    $btnSys.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnSys.Add_Click({
+        try {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new($targetPath)
+            $psi.UseShellExecute = $true
+            [System.Diagnostics.Process]::Start($psi) | Out-Null
+        } catch {
+            [System.Windows.MessageBox]::Show("Не удалось запустить просмотрщик: $($_.ToString())", "Ошибка", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        }
+    }.GetNewClosure())
+    [void]$pnlActions.Children.Add($btnSys)
+
+    $btnFolder = [System.Windows.Controls.Button]::new()
+    $btnFolder.Content = "📁 В папке"
+    $btnFolder.ToolTip = "Открыть папку с файлом в Проводнике"
+    $btnFolder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
+    $btnFolder.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnFolder.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnFolder.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $btnFolder.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
+    $btnFolder.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnFolder.Add_Click({
+        try {
+            [System.Diagnostics.Process]::Start("explorer.exe", "/select,`"$targetPath`"") | Out-Null
+        } catch {}
+    }.GetNewClosure())
+    [void]$pnlActions.Children.Add($btnFolder)
+
+    $btnCopyImg = [System.Windows.Controls.Button]::new()
+    $btnCopyImg.Content = "📋 Копировать"
+    $btnCopyImg.ToolTip = "Скопировать изображение в буфер обмена"
+    $btnCopyImg.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
+    $btnCopyImg.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnCopyImg.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnCopyImg.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $btnCopyImg.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
+    $btnCopyImg.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnCopyImg.Add_Click({
+        try {
+            [System.Windows.Clipboard]::SetImage($bi)
+            $btnCopyImg.Content = "✅ Скопировано!"
+            $t = [System.Windows.Threading.DispatcherTimer]::new()
+            $t.Interval = [TimeSpan]::FromMilliseconds(1500)
+            $t.Add_Tick({
+                $btnCopyImg.Content = "📋 Копировать"
+                $t.Stop()
+            }.GetNewClosure())
+            $t.Start()
+        } catch {}
+    }.GetNewClosure())
+    [void]$pnlActions.Children.Add($btnCopyImg)
+
+    $btnClose = [System.Windows.Controls.Button]::new()
+    $btnClose.Content = "✕"
+    $btnClose.ToolTip = "Закрыть окно (Esc)"
+    $btnClose.Background = [System.Windows.Media.Brushes]::Transparent
+    $btnClose.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+    $btnClose.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnClose.FontSize = 14
+    $btnClose.FontWeight = [System.Windows.FontWeights]::Bold
+    $btnClose.Padding = [System.Windows.Thickness]::new(8, 4, 8, 4)
+    $btnClose.Margin = [System.Windows.Thickness]::new(10, 6, 0, 6)
+    $btnClose.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnClose.Add_Click({ $viewer.Close() }.GetNewClosure())
+    [void]$pnlActions.Children.Add($btnClose)
+
+    [void]$topGrid.Children.Add($pnlActions)
+
+    $pnlTitle = [System.Windows.Controls.StackPanel]::new()
+    $pnlTitle.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $tbTitle = [System.Windows.Controls.TextBlock]::new()
+    $tbTitle.Text = $dispTitle
+    $tbTitle.FontWeight = [System.Windows.FontWeights]::Bold
+    $tbTitle.FontSize = 13
+    $tbTitle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F0F6FC")
+    $tbTitle.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    [void]$pnlTitle.Children.Add($tbTitle)
+
+    $tbMeta = [System.Windows.Controls.TextBlock]::new()
+    $tbMeta.Text = "${w} × ${h} px  •  ${fileSizeKB} KB  •  $targetPath"
+    $tbMeta.FontSize = 10
+    $tbMeta.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+    $tbMeta.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    [void]$pnlTitle.Children.Add($tbMeta)
+
+    [void]$topGrid.Children.Add($pnlTitle)
+    $topBar.Child = $topGrid
+    [void]$rootGrid.Children.Add($topBar)
+
+    # 2. Панель инструментов разметки (Drawing Toolbar)
+    $toolBar = [System.Windows.Controls.Border]::new()
+    $toolBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161B22")
+    $toolBar.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $toolBar.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
+    $toolBar.Padding = [System.Windows.Thickness]::new(14, 0, 14, 0)
+    [System.Windows.Controls.Grid]::SetRow($toolBar, 1)
+
+    $toolGrid = [System.Windows.Controls.DockPanel]::new()
+    $toolGrid.LastChildFill = $false
+
+    $pnlToolsLeft = [System.Windows.Controls.StackPanel]::new()
+    $pnlToolsLeft.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+    $pnlToolsLeft.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    [System.Windows.Controls.DockPanel]::SetDock($pnlToolsLeft, [System.Windows.Controls.Dock]::Left)
+
+    $modeButtons = [System.Collections.Generic.List[psobject]]::new()
+
+    $btnModePan = [System.Windows.Controls.Button]::new()
+    $btnModePan.Content = "🖐️ Рука"
+    $btnModePan.ToolTip = "Свободное перемещение и масштабирование (Клавиша H)"
+    $btnModePan.Height = 28
+    $btnModePan.Padding = [System.Windows.Thickness]::new(10, 2, 10, 2)
+    $btnModePan.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
+    $btnModePan.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnModePan.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F6FEB")
+    $btnModePan.Foreground = [System.Windows.Media.Brushes]::White
+    $btnModePan.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#388BFD")
+    $btnModePan.BorderThickness = [System.Windows.Thickness]::new(1)
+    $modeButtons.Add([pscustomobject]@{ Mode="Pan"; Button=$btnModePan })
+    [void]$pnlToolsLeft.Children.Add($btnModePan)
+
+    $btnModeRect = [System.Windows.Controls.Button]::new()
+    $btnModeRect.Content = "🔲 Рамка"
+    $btnModeRect.ToolTip = "Выделить область прямоугольником (Клавиша R)"
+    $btnModeRect.Height = 28
+    $btnModeRect.Padding = [System.Windows.Thickness]::new(10, 2, 10, 2)
+    $btnModeRect.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
+    $btnModeRect.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnModeRect.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnModeRect.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnModeRect.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $btnModeRect.BorderThickness = [System.Windows.Thickness]::new(1)
+    $modeButtons.Add([pscustomobject]@{ Mode="Rect"; Button=$btnModeRect })
+    [void]$pnlToolsLeft.Children.Add($btnModeRect)
+
+    $btnModeArrow = [System.Windows.Controls.Button]::new()
+    $btnModeArrow.Content = "↗️ Стрелка"
+    $btnModeArrow.ToolTip = "Нарисовать стрелку-указатель (Клавиша A)"
+    $btnModeArrow.Height = 28
+    $btnModeArrow.Padding = [System.Windows.Thickness]::new(10, 2, 10, 2)
+    $btnModeArrow.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+    $btnModeArrow.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnModeArrow.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnModeArrow.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnModeArrow.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $btnModeArrow.BorderThickness = [System.Windows.Thickness]::new(1)
+    $modeButtons.Add([pscustomobject]@{ Mode="Arrow"; Button=$btnModeArrow })
+    [void]$pnlToolsLeft.Children.Add($btnModeArrow)
+
+    $sep1 = [System.Windows.Controls.Border]::new()
+    $sep1.Width = 1
+    $sep1.Height = 18
+    $sep1.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $sep1.Margin = [System.Windows.Thickness]::new(4, 0, 10, 0)
+    [void]$pnlToolsLeft.Children.Add($sep1)
+
+    # Палитра цветов
+    $colorButtons = [System.Collections.Generic.List[psobject]]::new()
+    $colorsDef = @(
+        @{ Hex="#FF3333"; Name="Красный маркер" },
+        @{ Hex="#FFD700"; Name="Желтый маркер" },
+        @{ Hex="#00E676"; Name="Зеленый маркер" }
+    )
+
+    foreach ($c in $colorsDef) {
+        $btnColor = [System.Windows.Controls.Button]::new()
+        $btnColor.Width = 20
+        $btnColor.Height = 20
+        $btnColor.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
+        $btnColor.ToolTip = $c.Name
+        $btnColor.Cursor = [System.Windows.Input.Cursors]::Hand
+        $btnColor.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString($c.Hex)
+        if ($c.Hex -eq "#FF3333") {
+            $btnColor.BorderBrush = [System.Windows.Media.Brushes]::White
+            $btnColor.BorderThickness = [System.Windows.Thickness]::new(2)
+        } else {
+            $btnColor.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+            $btnColor.BorderThickness = [System.Windows.Thickness]::new(1)
+        }
+        $hexVal = $c.Hex
+        $colorButtons.Add([pscustomobject]@{ Hex=$hexVal; Button=$btnColor })
+        [void]$pnlToolsLeft.Children.Add($btnColor)
+    }
+
+    $sep2 = [System.Windows.Controls.Border]::new()
+    $sep2.Width = 1
+    $sep2.Height = 18
+    $sep2.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $sep2.Margin = [System.Windows.Thickness]::new(8, 0, 10, 0)
+    [void]$pnlToolsLeft.Children.Add($sep2)
+
+    # Undo
+    $btnUndo = [System.Windows.Controls.Button]::new()
+    $btnUndo.Content = "↩️ Отмена"
+    $btnUndo.ToolTip = "Отменить последний маркер (Ctrl+Z)"
+    $btnUndo.Height = 28
+    $btnUndo.Padding = [System.Windows.Thickness]::new(8, 2, 8, 2)
+    $btnUndo.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
+    $btnUndo.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnUndo.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnUndo.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnUndo.BorderThickness = [System.Windows.Thickness]::new(0)
+    [void]$pnlToolsLeft.Children.Add($btnUndo)
+
+    # Clear
+    $btnClear = [System.Windows.Controls.Button]::new()
+    $btnClear.Content = "🗑️ Очистить"
+    $btnClear.ToolTip = "Удалить все нарисованные маркеры"
+    $btnClear.Height = 28
+    $btnClear.Padding = [System.Windows.Thickness]::new(8, 2, 8, 2)
+    $btnClear.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
+    $btnClear.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnClear.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnClear.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnClear.BorderThickness = [System.Windows.Thickness]::new(0)
+    [void]$pnlToolsLeft.Children.Add($btnClear)
+
+    [void]$toolGrid.Children.Add($pnlToolsLeft)
+
+    # Правая часть тулбара: кнопка сохранения / применения разметки
+    $btnApply = [System.Windows.Controls.Button]::new()
+    $btnApply.Content = "💾 Применить разметку"
+    $btnApply.ToolTip = "Запечь маркеры в файл `_annotated.png` и прикрепить к сообщению"
+    $btnApply.Height = 28
+    $btnApply.Padding = [System.Windows.Thickness]::new(14, 2, 14, 2)
+    $btnApply.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnApply.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#238636")
+    $btnApply.Foreground = [System.Windows.Media.Brushes]::White
+    $btnApply.FontWeight = [System.Windows.FontWeights]::SemiBold
+    $btnApply.BorderThickness = [System.Windows.Thickness]::new(0)
+    [System.Windows.Controls.DockPanel]::SetDock($btnApply, [System.Windows.Controls.Dock]::Right)
+    [void]$toolGrid.Children.Add($btnApply)
+
+    $toolBar.Child = $toolGrid
+    [void]$rootGrid.Children.Add($toolBar)
+
+    # 3. Центральная область с изображением и векторным холстом
+    $canvasHost = [System.Windows.Controls.Grid]::new()
+    $canvasHost.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#0D1117")
+    $canvasHost.ClipToBounds = $true
+    $canvasHost.Cursor = [System.Windows.Input.Cursors]::Hand
+    [System.Windows.Controls.Grid]::SetRow($canvasHost, 2)
+
+    $imgBox = [System.Windows.Controls.Grid]::new()
+    $imgBox.Width = $w
+    $imgBox.Height = $h
+    $imgBox.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+    $imgBox.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+
+    $imgView = [System.Windows.Controls.Image]::new()
+    $imgView.Source = $bi
+    $imgView.Width = $w
+    $imgView.Height = $h
+
+    $annotCanvas = [System.Windows.Controls.Canvas]::new()
+    $annotCanvas.Width = $w
+    $annotCanvas.Height = $h
+    $annotCanvas.Background = [System.Windows.Media.Brushes]::Transparent
+
+    [void]$imgBox.Children.Add($imgView)
+    [void]$imgBox.Children.Add($annotCanvas)
+
+    $transformGroup = [System.Windows.Media.TransformGroup]::new()
+    $scaleTransform = [System.Windows.Media.ScaleTransform]::new(1.0, 1.0)
+    $translateTransform = [System.Windows.Media.TranslateTransform]::new(0.0, 0.0)
+    $transformGroup.Children.Add($scaleTransform)
+    $transformGroup.Children.Add($translateTransform)
+    $imgBox.RenderTransform = $transformGroup
+    $imgBox.RenderTransformOrigin = [System.Windows.Point]::new(0.5, 0.5)
+
+    [void]$canvasHost.Children.Add($imgBox)
+    [void]$rootGrid.Children.Add($canvasHost)
+
+    # 4. Нижняя панель подсказок и масштабирования
+    $botBar = [System.Windows.Controls.Border]::new()
+    $botBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161B22")
+    $botBar.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $botBar.BorderThickness = [System.Windows.Thickness]::new(0, 1, 0, 0)
+    $botBar.Padding = [System.Windows.Thickness]::new(12, 0, 12, 0)
+    [System.Windows.Controls.Grid]::SetRow($botBar, 3)
+
+    $botGrid = [System.Windows.Controls.DockPanel]::new()
+    $botGrid.LastChildFill = $false
+
+    $lblHelp = [System.Windows.Controls.TextBlock]::new()
+    $lblHelp.Text = "💡 Перемещение: зажмите ЛКМ  •  Колесико: масштаб  •  2x клик: сброс  •  Esc: закрыть"
+    $lblHelp.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $lblHelp.FontSize = 11
+    $lblHelp.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+    [System.Windows.Controls.DockPanel]::SetDock($lblHelp, [System.Windows.Controls.Dock]::Left)
+    [void]$botGrid.Children.Add($lblHelp)
+
+    $pnlZoom = [System.Windows.Controls.StackPanel]::new()
+    $pnlZoom.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+    $pnlZoom.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    [System.Windows.Controls.DockPanel]::SetDock($pnlZoom, [System.Windows.Controls.Dock]::Right)
+
+    $lblZoomVal = [System.Windows.Controls.TextBlock]::new()
+    $lblZoomVal.Text = "100%"
+    $lblZoomVal.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $lblZoomVal.Margin = [System.Windows.Thickness]::new(8, 0, 8, 0)
+    $lblZoomVal.FontSize = 11
+    $lblZoomVal.FontWeight = [System.Windows.FontWeights]::SemiBold
+    $lblZoomVal.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+
+    $btnZoomOut = [System.Windows.Controls.Button]::new()
+    $btnZoomOut.Content = "➖"
+    $btnZoomOut.Width = 26
+    $btnZoomOut.Height = 22
+    $btnZoomOut.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnZoomOut.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomOut.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnZoomOut.Cursor = [System.Windows.Input.Cursors]::Hand
+
+    $btnZoomIn = [System.Windows.Controls.Button]::new()
+    $btnZoomIn.Content = "➕"
+    $btnZoomIn.Width = 26
+    $btnZoomIn.Height = 22
+    $btnZoomIn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnZoomIn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomIn.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnZoomIn.Cursor = [System.Windows.Input.Cursors]::Hand
+
+    $btnZoomReset = [System.Windows.Controls.Button]::new()
+    $btnZoomReset.Content = "1:1"
+    $btnZoomReset.Width = 32
+    $btnZoomReset.Height = 22
+    $btnZoomReset.Margin = [System.Windows.Thickness]::new(6, 0, 0, 0)
+    $btnZoomReset.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnZoomReset.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomReset.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnZoomReset.Cursor = [System.Windows.Input.Cursors]::Hand
+
+    [void]$pnlZoom.Children.Add($btnZoomOut)
+    [void]$pnlZoom.Children.Add($lblZoomVal)
+    [void]$pnlZoom.Children.Add($btnZoomIn)
+    [void]$pnlZoom.Children.Add($btnZoomReset)
+
+    [void]$botGrid.Children.Add($pnlZoom)
+    $botBar.Child = $botGrid
+    [void]$rootGrid.Children.Add($botBar)
+
+    # 5. Единый синхронизированный контекст состояния окна
+    $state = [hashtable]::Synchronized(@{
+        Viewer             = $viewer
+        CanvasHost         = $canvasHost
+        AnnotCanvas        = $annotCanvas
+        ScaleTransform     = $scaleTransform
+        TranslateTransform = $translateTransform
+        LblHelp            = $lblHelp
+        LblZoomVal         = $lblZoomVal
+        BtnPan             = $btnModePan
+        BtnRect            = $btnModeRect
+        BtnArrow           = $btnModeArrow
+        BtnUndo            = $btnUndo
+        BtnClear           = $btnClear
+        BtnApply           = $btnApply
+        ModeButtons        = $modeButtons
+        ColorButtons       = $colorButtons
+        CurrentMode        = "Pan"
+        CurrentColor       = "#FF3333"
+        Width              = $w
+        Height             = $h
+        BaseThickness      = $baseThickness
+        IsPanning          = $false
+        IsDrawing          = $false
+        StartX             = 0.0
+        StartY             = 0.0
+        StartMouseX        = 0.0
+        StartMouseY        = 0.0
+        StartTransX        = 0.0
+        StartTransY        = 0.0
+        CurrentZoom        = 1.0
+        InitialZoom        = 1.0
+        CurrentShape       = $null
+        ShapesList         = [System.Collections.Generic.List[psobject]]::new()
+        BitmapImage        = $bi
+        TargetPath         = $targetPath
+        AttachedItem       = $AttachedItem
+    })
+
+    # Обработчики режимов
+    $SwitchMode = {
+        param([string]$newMode)
+        $state.CurrentMode = $newMode
+        foreach ($mb in $state.ModeButtons) {
+            if ($mb.Mode -eq $newMode) {
+                $mb.Button.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F6FEB")
+                $mb.Button.Foreground = [System.Windows.Media.Brushes]::White
+                $mb.Button.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#388BFD")
+            } else {
+                $mb.Button.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+                $mb.Button.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+                $mb.Button.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+            }
+        }
+        if ($newMode -eq "Pan") {
+            $state.AnnotCanvas.Cursor = [System.Windows.Input.Cursors]::Hand
+            $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Hand
+            $state.LblHelp.Text = "💡 Перемещение: зажмите ЛКМ  •  Колесико: масштаб  •  2x клик: сброс  •  Esc: закрыть"
+        } elseif ($newMode -eq "Rect") {
+            $state.AnnotCanvas.Cursor = [System.Windows.Input.Cursors]::Cross
+            $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Cross
+            $state.LblHelp.Text = "💡 Рисование рамки: зажмите ЛКМ и протяните  •  Панорамирование: зажмите ПКМ/СКМ"
+        } elseif ($newMode -eq "Arrow") {
+            $state.AnnotCanvas.Cursor = [System.Windows.Input.Cursors]::Cross
+            $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Cross
+            $state.LblHelp.Text = "💡 Рисование стрелки: протяните ЛКМ от начала к цели  •  Панорамирование: зажмите ПКМ/СКМ"
+        }
+    }.GetNewClosure()
+
+    $btnModePan.Add_Click({ & $SwitchMode "Pan" }.GetNewClosure())
+    $btnModeRect.Add_Click({ & $SwitchMode "Rect" }.GetNewClosure())
+    $btnModeArrow.Add_Click({ & $SwitchMode "Arrow" }.GetNewClosure())
+
+    # Выбор цвета маркера
+    foreach ($cb in $state.ColorButtons) {
+        $colorHex = $cb.Hex
+        $cb.Button.Add_Click({
+            $state.CurrentColor = $colorHex
+            foreach ($item in $state.ColorButtons) {
+                if ($item.Hex -eq $colorHex) {
+                    $item.Button.BorderBrush = [System.Windows.Media.Brushes]::White
+                    $item.Button.BorderThickness = [System.Windows.Thickness]::new(2)
+                } else {
+                    $item.Button.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+                    $item.Button.BorderThickness = [System.Windows.Thickness]::new(1)
+                }
+            }
+        }.GetNewClosure())
+    }
+
+    # Undo
+    $PerformUndo = {
+        if ($state.ShapesList.Count -gt 0) {
+            $lastItem = $state.ShapesList[$state.ShapesList.Count - 1]
+            if ($lastItem -and $lastItem.Element) {
+                $state.AnnotCanvas.Children.Remove($lastItem.Element) | Out-Null
+            }
+            $state.ShapesList.Remove($lastItem) | Out-Null
+        }
+    }.GetNewClosure()
+    $btnUndo.Add_Click({ & $PerformUndo }.GetNewClosure())
+
+    # Clear
+    $PerformClear = {
+        $state.AnnotCanvas.Children.Clear()
+        $state.ShapesList.Clear()
+    }.GetNewClosure()
+    $btnClear.Add_Click({ & $PerformClear }.GetNewClosure())
+
+    # Масштабирование
+    $btnZoomOut.Add_Click({
+        $state.CurrentZoom = [math]::Max(0.1, $state.CurrentZoom - 0.15)
+        $state.ScaleTransform.ScaleX = $state.CurrentZoom
+        $state.ScaleTransform.ScaleY = $state.CurrentZoom
+        $state.LblZoomVal.Text = "$([math]::Round($state.CurrentZoom * 100))%"
+    }.GetNewClosure())
+
+    $btnZoomIn.Add_Click({
+        $state.CurrentZoom = [math]::Min(10.0, $state.CurrentZoom + 0.15)
+        $state.ScaleTransform.ScaleX = $state.CurrentZoom
+        $state.ScaleTransform.ScaleY = $state.CurrentZoom
+        $state.LblZoomVal.Text = "$([math]::Round($state.CurrentZoom * 100))%"
+    }.GetNewClosure())
+
+    $btnZoomReset.Add_Click({
+        $state.CurrentZoom = 1.0
+        $state.ScaleTransform.ScaleX = 1.0
+        $state.ScaleTransform.ScaleY = 1.0
+        $state.TranslateTransform.X = 0.0
+        $state.TranslateTransform.Y = 0.0
+        $state.LblZoomVal.Text = "100%"
+    }.GetNewClosure())
+
+    # Мышиные события: интерактивное панорамирование и рисование
+    $canvasHost.Add_PreviewMouseDown({
+        param($s, $e)
+        if ($state.CurrentMode -eq "Pan") {
+            if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left -or $e.ChangedButton -eq [System.Windows.Input.MouseButton]::Middle) {
+                if ($e.ClickCount -ge 2 -and $e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
+                    $state.CurrentZoom = $state.InitialZoom
+                    $state.ScaleTransform.ScaleX = $state.InitialZoom
+                    $state.ScaleTransform.ScaleY = $state.InitialZoom
+                    $state.TranslateTransform.X = 0.0
+                    $state.TranslateTransform.Y = 0.0
+                    $state.LblZoomVal.Text = "$([math]::Round($state.InitialZoom * 100))%"
+                    $e.Handled = $true
+                    return
+                }
+
+                $state.IsPanning = $true
+                $pos = $e.GetPosition($state.CanvasHost)
+                $state.StartMouseX = $pos.X
+                $state.StartMouseY = $pos.Y
+                $state.StartTransX = $state.TranslateTransform.X
+                $state.StartTransY = $state.TranslateTransform.Y
+                $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::SizeAll
+                $state.CanvasHost.CaptureMouse() | Out-Null
+                $e.Handled = $true
+            }
+        } else {
+            # В режимах Rect и Arrow: ПКМ или СКМ панорамируют
+            if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Right -or $e.ChangedButton -eq [System.Windows.Input.MouseButton]::Middle) {
+                $state.IsPanning = $true
+                $pos = $e.GetPosition($state.CanvasHost)
+                $state.StartMouseX = $pos.X
+                $state.StartMouseY = $pos.Y
+                $state.StartTransX = $state.TranslateTransform.X
+                $state.StartTransY = $state.TranslateTransform.Y
+                $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::SizeAll
+                $state.CanvasHost.CaptureMouse() | Out-Null
+                $e.Handled = $true
+                return
+            }
+
+            # ЛКМ рисует
+            if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
+                $pos = $e.GetPosition($state.AnnotCanvas)
+                $state.IsDrawing = $true
+                $state.StartX = [math]::Max(0.0, [math]::Min([double]$state.Width, $pos.X))
+                $state.StartY = [math]::Max(0.0, [math]::Min([double]$state.Height, $pos.Y))
+
+                $brush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($state.CurrentColor)
+
+                if ($state.CurrentMode -eq "Rect") {
+                    $shape = [System.Windows.Shapes.Rectangle]::new()
+                    $shape.Stroke = $brush
+                    $shape.StrokeThickness = $state.BaseThickness
+                    $col = [System.Windows.Media.ColorConverter]::ConvertFromString($state.CurrentColor)
+                    $shape.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromArgb(40, $col.R, $col.G, $col.B))
+                    $shape.RadiusX = 4
+                    $shape.RadiusY = 4
+                    [System.Windows.Controls.Canvas]::SetLeft($shape, $state.StartX)
+                    [System.Windows.Controls.Canvas]::SetTop($shape, $state.StartY)
+                    $shape.Width = 0
+                    $shape.Height = 0
+                    [void]$state.AnnotCanvas.Children.Add($shape)
+                    $state.CurrentShape = $shape
+                } elseif ($state.CurrentMode -eq "Arrow") {
+                    $shape = [System.Windows.Shapes.Path]::new()
+                    $shape.Stroke = $brush
+                    $shape.StrokeThickness = $state.BaseThickness
+                    $shape.Fill = $brush
+                    $shape.StrokeStartLineCap = [System.Windows.Media.PenLineCap]::Round
+                    $shape.StrokeEndLineCap = [System.Windows.Media.PenLineCap]::Round
+                    $shape.StrokeLineJoin = [System.Windows.Media.PenLineJoin]::Round
+                    [void]$state.AnnotCanvas.Children.Add($shape)
+                    $state.CurrentShape = $shape
+                }
+
+                $state.CanvasHost.CaptureMouse() | Out-Null
+                $e.Handled = $true
+            }
+        }
+    }.GetNewClosure())
+
+    $canvasHost.Add_PreviewMouseMove({
+        param($s, $e)
+        if ($state.IsPanning) {
+            $cur = $e.GetPosition($state.CanvasHost)
+            $deltaX = $cur.X - $state.StartMouseX
+            $deltaY = $cur.Y - $state.StartMouseY
+            $state.TranslateTransform.X = $state.StartTransX + $deltaX
+            $state.TranslateTransform.Y = $state.StartTransY + $deltaY
+        } elseif ($state.IsDrawing -and $state.CurrentShape) {
+            $curPos = $e.GetPosition($state.AnnotCanvas)
+            $curX = [math]::Max(0.0, [math]::Min([double]$state.Width, $curPos.X))
+            $curY = [math]::Max(0.0, [math]::Min([double]$state.Height, $curPos.Y))
+
+            if ($state.CurrentMode -eq "Rect") {
+                $minX = [math]::Min($state.StartX, $curX)
+                $minY = [math]::Min($state.StartY, $curY)
+                $rw = [math]::Abs($curX - $state.StartX)
+                $rh = [math]::Abs($curY - $state.StartY)
+                [System.Windows.Controls.Canvas]::SetLeft($state.CurrentShape, $minX)
+                [System.Windows.Controls.Canvas]::SetTop($state.CurrentShape, $minY)
+                $state.CurrentShape.Width = $rw
+                $state.CurrentShape.Height = $rh
+            } elseif ($state.CurrentMode -eq "Arrow") {
+                $arrowGeom = New-ArrowGeometry -x1 $state.StartX -y1 $state.StartY -x2 $curX -y2 $curY -headLength ($state.BaseThickness * 7.0) -headWidth ($state.BaseThickness * 3.5)
+                if ($arrowGeom) {
+                    $state.CurrentShape.Data = $arrowGeom
+                }
+            }
+        }
+    }.GetNewClosure())
+
+    $canvasHost.Add_PreviewMouseUp({
+        param($s, $e)
+        if ($state.IsPanning) {
+            $state.IsPanning = $false
+            $state.CanvasHost.ReleaseMouseCapture()
+            if ($state.CurrentMode -eq "Pan") {
+                $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Hand
+            } else {
+                $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Cross
+            }
+            $e.Handled = $true
+        } elseif ($state.IsDrawing) {
+            $state.IsDrawing = $false
+            $state.CanvasHost.ReleaseMouseCapture()
+
+            if ($state.CurrentShape) {
+                if ($state.CurrentMode -eq "Rect") {
+                    if ($state.CurrentShape.Width -ge 6 -and $state.CurrentShape.Height -ge 6) {
+                        $state.ShapesList.Add([pscustomobject]@{
+                            Type    = "Rect"
+                            Element = $state.CurrentShape
+                            X       = [System.Windows.Controls.Canvas]::GetLeft($state.CurrentShape)
+                            Y       = [System.Windows.Controls.Canvas]::GetTop($state.CurrentShape)
+                            W       = $state.CurrentShape.Width
+                            H       = $state.CurrentShape.Height
+                            Color   = $state.CurrentColor
+                        })
+                    } else {
+                        $state.AnnotCanvas.Children.Remove($state.CurrentShape) | Out-Null
+                    }
+                } elseif ($state.CurrentMode -eq "Arrow") {
+                    $curPos = $e.GetPosition($state.AnnotCanvas)
+                    $curX = [math]::Max(0.0, [math]::Min([double]$state.Width, $curPos.X))
+                    $curY = [math]::Max(0.0, [math]::Min([double]$state.Height, $curPos.Y))
+                    $dx = $curX - $state.StartX
+                    $dy = $curY - $state.StartY
+                    $len = [math]::Sqrt($dx * $dx + $dy * $dy)
+                    if ($len -ge 10.0) {
+                        $state.ShapesList.Add([pscustomobject]@{
+                            Type    = "Arrow"
+                            Element = $state.CurrentShape
+                            X1      = $state.StartX
+                            Y1      = $state.StartY
+                            X2      = $curX
+                            Y2      = $curY
+                            Color   = $state.CurrentColor
+                        })
+                    } else {
+                        $state.AnnotCanvas.Children.Remove($state.CurrentShape) | Out-Null
+                    }
+                }
+                $state.CurrentShape = $null
+            }
+            $e.Handled = $true
+        }
+    }.GetNewClosure())
+
+    $canvasHost.Add_LostMouseCapture({
+        $state.IsPanning = $false
+        if ($state.IsDrawing) {
+            $state.IsDrawing = $false
+            if ($state.CurrentShape) {
+                $state.AnnotCanvas.Children.Remove($state.CurrentShape) | Out-Null
+                $state.CurrentShape = $null
+            }
+        }
+        if ($state.CurrentMode -eq "Pan") {
+            $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Hand
+        } else {
+            $state.CanvasHost.Cursor = [System.Windows.Input.Cursors]::Cross
+        }
+    }.GetNewClosure())
+
+    # Масштабирование колесиком мыши
+    $canvasHost.Add_PreviewMouseWheel({
+        param($s, $e)
+        $e.Handled = $true
+        $delta = if ($e.Delta -gt 0) { 0.15 } else { -0.15 }
+        $state.CurrentZoom = [math]::Max(0.1, [math]::Min(10.0, $state.CurrentZoom + $delta))
+        $state.ScaleTransform.ScaleX = $state.CurrentZoom
+        $state.ScaleTransform.ScaleY = $state.CurrentZoom
+        $state.LblZoomVal.Text = "$([math]::Round($state.CurrentZoom * 100))%"
+    }.GetNewClosure())
+
+    # Автоматическая подгонка масштаба при загрузке окна
+    $canvasHost.Add_Loaded({
+        if ($state.CanvasHost.ActualWidth -gt 50 -and $state.CanvasHost.ActualHeight -gt 50) {
+            $vw = $state.CanvasHost.ActualWidth - 20
+            $vh = $state.CanvasHost.ActualHeight - 20
+            $fit = [math]::Min(1.0, [math]::Min(($vw / $state.Width), ($vh / $state.Height)))
+            if ($fit -gt 0.05) {
+                $state.InitialZoom = $fit
+                $state.CurrentZoom = $fit
+                $state.ScaleTransform.ScaleX = $fit
+                $state.ScaleTransform.ScaleY = $fit
+                $state.LblZoomVal.Text = "$([math]::Round($fit * 100))%"
+            }
+        }
+    }.GetNewClosure())
+
+    # Сохранение и запекание разметки в _annotated.png
+    $PerformApply = {
+        if ($state.ShapesList.Count -eq 0) {
+            [System.Windows.MessageBox]::Show("Сначала нарисуйте хотя бы один маркер (рамку или стрелку) на изображении.", "Разметка не найдена", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+            return
+        }
+
+        try {
+            # 1. Запекание нативного изображения с разметкой
+            $dv = [System.Windows.Media.DrawingVisual]::new()
+            $dc = $dv.RenderOpen()
+            $dc.DrawImage($state.BitmapImage, [System.Windows.Rect]::new(0, 0, $state.Width, $state.Height))
+
+            foreach ($item in $state.ShapesList) {
+                $brush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($item.Color)
+                if ($item.Type -eq "Rect") {
+                    $col = [System.Windows.Media.ColorConverter]::ConvertFromString($item.Color)
+                    $fillBrush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromArgb(40, $col.R, $col.G, $col.B))
+                    $pen = [System.Windows.Media.Pen]::new($brush, $state.BaseThickness)
+                    $dc.DrawRoundedRectangle($fillBrush, $pen, [System.Windows.Rect]::new($item.X, $item.Y, $item.W, $item.H), 4.0, 4.0)
+                } elseif ($item.Type -eq "Arrow") {
+                    $pen = [System.Windows.Media.Pen]::new($brush, $state.BaseThickness)
+                    $pen.StartLineCap = [System.Windows.Media.PenLineCap]::Round
+                    $pen.EndLineCap = [System.Windows.Media.PenLineCap]::Round
+                    $pen.LineJoin = [System.Windows.Media.PenLineJoin]::Round
+                    $arrowGeom = New-ArrowGeometry -x1 $item.X1 -y1 $item.Y1 -x2 $item.X2 -y2 $item.Y2 -headLength ($state.BaseThickness * 7.0) -headWidth ($state.BaseThickness * 3.5)
+                    if ($arrowGeom) {
+                        $dc.DrawGeometry($brush, $pen, $arrowGeom)
+                    }
+                }
+            }
+            $dc.Close()
+
+            $rtb = [System.Windows.Media.Imaging.RenderTargetBitmap]::new($state.Width, $state.Height, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+            $rtb.Render($dv)
+
+            # 2. Сохранение файла
+            $dir = [System.IO.Path]::GetDirectoryName($state.TargetPath)
+            $baseFn = [System.IO.Path]::GetFileNameWithoutExtension($state.TargetPath)
+            $cleanBase = $baseFn -replace '_annotated$', ''
+            $annotatedPath = Join-Path $dir "${cleanBase}_annotated.png"
+
+            $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
+            $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb))
+            $fsOut = [System.IO.FileStream]::new($annotatedPath, [System.IO.FileMode]::Create)
+            $encoder.Save($fsOut)
+            $fsOut.Close()
+
+            # 3. Привязка к списку вложений
+            $targetAtt = $state.AttachedItem
+            if (-not $targetAtt) {
+                $targetAtt = $global:AttachedImages | Where-Object { $_.FilePath -eq $state.TargetPath -or $_.FilePath -eq (Join-Path $dir "${cleanBase}.png") } | Select-Object -First 1
+            }
+
+            if ($targetAtt) {
+                $targetAtt.AnnotatedFilePath = $annotatedPath
+                $targetAtt.HasAnnotation = $true
+            } else {
+                $newItem = [pscustomobject]@{
+                    FilePath          = $state.TargetPath
+                    FileName          = [System.IO.Path]::GetFileName($state.TargetPath)
+                    DisplayName       = $cleanBase
+                    DimInfo           = "$($state.Width)x$($state.Height) • $([math]::Round((Get-Item $state.TargetPath).Length / 1024)) KB"
+                    ImageSource       = $state.BitmapImage
+                    AnnotatedFilePath = $annotatedPath
+                    HasAnnotation     = $true
+                }
+                $global:AttachedImages.Add($newItem)
+            }
+
+            Render-AttachmentsUI
+
+            $state.BtnApply.Content = "✅ Разметка сохранена!"
+            $state.BtnApply.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F6FEB")
+            $t = [System.Windows.Threading.DispatcherTimer]::new()
+            $t.Interval = [TimeSpan]::FromMilliseconds(2000)
+            $t.Add_Tick({
+                $state.BtnApply.Content = "💾 Применить разметку"
+                $state.BtnApply.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#238636")
+                $t.Stop()
+            }.GetNewClosure())
+            $t.Start()
+        } catch {
+            [System.Windows.MessageBox]::Show("Не удалось сохранить разметку: $($_.ToString())", "Ошибка сохранения", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        }
+    }.GetNewClosure()
+    $btnApply.Add_Click({ & $PerformApply }.GetNewClosure())
+
+    # Горячие клавиши
+    $viewer.Add_KeyDown({
+        param($s, $e)
+        if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+            $viewer.Close()
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::Z -and [System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) {
+            & $PerformUndo
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::H) {
+            & $SwitchMode "Pan"
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::R) {
+            & $SwitchMode "Rect"
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::A) {
+            & $SwitchMode "Arrow"
+        }
+    }.GetNewClosure())
+
+    $viewer.Content = $rootGrid
+    $viewer.Show()
+    $viewer.Focus() | Out-Null
+}
+
 function Render-AttachmentsUI {
     $pnlAttachmentsList.Children.Clear()
     if ($global:AttachedImages.Count -eq 0) {
@@ -1809,14 +2741,134 @@ function Append-UserMessageToLog {
         $p.Inlines.Add($qRun)
     }
 
-    # 2. Бейджи прикрепленных файлов (если есть)
-    if (-not [string]::IsNullOrEmpty($Badges)) {
-        $badgeRun = [System.Windows.Documents.Run]::new("$Badges ")
-        $badgeRun.Foreground = Get-CachedBrush "#E2C08D"
-        $badgeRun.FontWeight = [System.Windows.FontWeights]::SemiBold
-        $p.Inlines.Add($badgeRun)
+    # 2. Бейджи прикрепленных файлов: интерактивные кликабельные плашки для изображений и документов
+    $activeAttachments = @()
+    if ($Attachments) {
+        $activeAttachments = @($Attachments)
+    } elseif (-not [string]::IsNullOrEmpty($Badges)) {
+        # Резервный разбор имен файлов из строки [🖼️ filename1, 🎯 filename2]
+        $extracted = [System.Collections.Generic.List[psobject]]::new()
+        foreach ($bm in [regex]::Matches($Badges, '(?m)[🖼️🎯]\s*([^,\]]+)')) {
+            $fn = $bm.Groups[1].Value.Trim()
+            if ($fn) {
+                $cand = @(
+                    (Join-Path (Get-AttachmentsDirectory) $fn),
+                    (if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" }),
+                    (Join-Path $launcherDir "attachments\$fn")
+                ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+                $fPath = if ($cand) { $cand } else { $fn }
+                $extracted.Add([pscustomobject]@{
+                    FilePath    = $fPath
+                    FileName    = $fn
+                    DisplayName = $fn
+                })
+            }
+        }
+        $activeAttachments = @($extracted)
     }
 
+    if (@($activeAttachments).Length -gt 0) {
+        foreach ($att in @($activeAttachments)) {
+            $attPath = if ($att.FilePath) { [string]$att.FilePath } else { "" }
+            $attName = if ($att.DisplayName) { [string]$att.DisplayName } elseif ($att.FileName) { [string]$att.FileName } else { [System.IO.Path]::GetFileName($attPath) }
+
+            $isAnnotated = ($attName -match "^🎯" -or $attPath -match "_annotated\.png$")
+            $isImage = ($attPath -match '\.(png|jpg|jpeg|bmp|gif|webp)$' -or $attName -match '\.(png|jpg|jpeg|bmp|gif|webp)$' -or $attName -match "^[🖼️🎯]")
+
+            $badgeBorder = [System.Windows.Controls.Border]::new()
+            $badgeBorder.Background = Get-CachedBrush "#262C36"
+            $badgeBorder.BorderBrush = if ($isAnnotated) { Get-CachedBrush "#3FB950" } else { Get-CachedBrush "#38414E" }
+            $badgeBorder.BorderThickness = [System.Windows.Thickness]::new(1)
+            $badgeBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $badgeBorder.Padding = [System.Windows.Thickness]::new(6, 2, 6, 2)
+            $badgeBorder.Margin = [System.Windows.Thickness]::new(0, 0, 5, 0)
+            $badgeBorder.Cursor = [System.Windows.Input.Cursors]::Hand
+            $badgeBorder.ToolTip = if ($isAnnotated) { "Нажмите для просмотра разметки маркерами`n$attPath" } elseif ($isImage) { "Нажмите для просмотра изображения`n$attPath" } else { "Нажмите для открытия файла`n$attPath" }
+
+            $sp = [System.Windows.Controls.StackPanel]::new()
+            $sp.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+
+            $iconTb = [System.Windows.Controls.TextBlock]::new()
+            $iconTb.Text = if ($isAnnotated) { "🎯 " } elseif ($isImage) { "🖼️ " } else { "📎 " }
+            $iconTb.FontSize = [math]::Max(11.0, $effFontSize - 1.0)
+            [void]$sp.Children.Add($iconTb)
+
+            $nameTb = [System.Windows.Controls.TextBlock]::new()
+            $nameTb.Text = ($attName -replace "^[🖼️🎯📎\s]+", "").Trim()
+            $nameTb.FontSize = [math]::Max(11.0, $effFontSize - 1.0)
+            $nameTb.FontWeight = [System.Windows.FontWeights]::SemiBold
+            $nameTb.Foreground = if ($isAnnotated) { Get-CachedBrush "#3FB950" } else { Get-CachedBrush "#79C0FF" }
+            [void]$sp.Children.Add($nameTb)
+
+            $badgeBorder.Child = $sp
+
+            # Ховер подсветка
+            $badgeBorder.Add_MouseEnter({
+                $badgeBorder.Background = Get-CachedBrush "#313945"
+                $badgeBorder.BorderBrush = if ($isAnnotated) { Get-CachedBrush "#46D160" } else { Get-CachedBrush "#58A6FF" }
+            }.GetNewClosure())
+            $badgeBorder.Add_MouseLeave({
+                $badgeBorder.Background = Get-CachedBrush "#262C36"
+                $badgeBorder.BorderBrush = if ($isAnnotated) { Get-CachedBrush "#3FB950" } else { Get-CachedBrush "#38414E" }
+            }.GetNewClosure())
+
+            # Клик левой кнопкой мыши открывает просмотрщик (для картинок) или проводник/файл
+            $clickPath = $attPath
+            $clickTitle = $nameTb.Text
+            $badgeBorder.Add_PreviewMouseLeftButtonDown({
+                param($s, $e)
+                $e.Handled = $true
+                if ($isImage) {
+                    Show-ImageViewerWindow -FilePath $clickPath -Title $clickTitle
+                } else {
+                    try {
+                        $psi = [System.Diagnostics.ProcessStartInfo]::new($clickPath)
+                        $psi.UseShellExecute = $true
+                        [System.Diagnostics.Process]::Start($psi) | Out-Null
+                    } catch {}
+                }
+            }.GetNewClosure())
+
+            # Контекстное меню
+            $ctxMenu = [System.Windows.Controls.ContextMenu]::new()
+            if ($isImage) {
+                $miView = [System.Windows.Controls.MenuItem]::new()
+                $miView.Header = "Просмотреть изображение"
+                $miView.Add_Click({ Show-ImageViewerWindow -FilePath $clickPath -Title $clickTitle }.GetNewClosure())
+                [void]$ctxMenu.Items.Add($miView)
+            }
+            $miSys = [System.Windows.Controls.MenuItem]::new()
+            $miSys.Header = "Открыть в системе"
+            $miSys.Add_Click({
+                try {
+                    $psi = [System.Diagnostics.ProcessStartInfo]::new($clickPath)
+                    $psi.UseShellExecute = $true
+                    [System.Diagnostics.Process]::Start($psi) | Out-Null
+                } catch {}
+            }.GetNewClosure())
+            [void]$ctxMenu.Items.Add($miSys)
+
+            $miFolder = [System.Windows.Controls.MenuItem]::new()
+            $miFolder.Header = "Показать в папке (Проводник)"
+            $miFolder.Add_Click({
+                try { [System.Diagnostics.Process]::Start("explorer.exe", "/select,`"$clickPath`"") | Out-Null } catch {}
+            }.GetNewClosure())
+            [void]$ctxMenu.Items.Add($miFolder)
+
+            $miCopyPath = [System.Windows.Controls.MenuItem]::new()
+            $miCopyPath.Header = "Копировать путь к файлу"
+            $miCopyPath.Add_Click({
+                try { [System.Windows.Clipboard]::SetText($clickPath) } catch {}
+            }.GetNewClosure())
+            [void]$ctxMenu.Items.Add($miCopyPath)
+
+            $badgeBorder.ContextMenu = $ctxMenu
+
+            $uic = [System.Windows.Documents.InlineUIContainer]::new($badgeBorder)
+            $p.Inlines.Add($uic)
+            $p.Inlines.Add([System.Windows.Documents.Run]::new(" "))
+        }
+    }
     # 3. Первая строка сообщения пользователя - строго на той же строке
     $firstInlines = Parse-InlineMarkdownRuns -LineText $firstLine -BaseColor "#F1F1F1" -FontSize $effFontSize
     foreach ($inl in $firstInlines) {
@@ -4166,19 +5218,31 @@ $global:ParseTranscriptScript = {
 
                     $badges = ""
                     $cleanText = $raw
+                    $turnAttachments = [System.Collections.Generic.List[psobject]]::new()
 
-                    # Разбор прикрепленных изображений: извлечение имени файлов в бейджи и очистка текста
-                    if ($raw -match '(?s)\[Прикрепленные изображения:\s*(.*?)\s*\]') {
+                    # Разбор прикрепленных изображений и файлов: извлечение путей и имен файлов в бейджи и очистка текста
+                    if ($raw -match '(?s)\[Прикрепленные (?:изображения|файлы[^\:]*):\s*(.*?)\s*\]') {
                         $imgSection = $matches[1]
                         $imgFiles = [System.Collections.Generic.List[string]]::new()
                         foreach ($m in [regex]::Matches($imgSection, '(?m)^\s*-\s*(?:file:///)?([^\r\n]+)')) {
-                            $fn = [System.IO.Path]::GetFileName($m.Groups[1].Value.Trim().Replace('/', '\'))
-                            if ($fn) { $imgFiles.Add("🖼️ $fn") }
+                            $rawPath = $m.Groups[1].Value.Trim().Replace('/', '\')
+                            try { $rawPath = [System.Uri]::UnescapeDataString($rawPath) } catch {}
+                            $fn = [System.IO.Path]::GetFileName($rawPath)
+                            if ($fn) {
+                                $isAnnot = ($fn -match '_annotated\.png$')
+                                $icon = if ($isAnnot) { "🎯" } else { "🖼️" }
+                                $imgFiles.Add("$icon $fn")
+                                $turnAttachments.Add([pscustomobject]@{
+                                    FilePath    = $rawPath
+                                    FileName    = $fn
+                                    DisplayName = $fn
+                                })
+                            }
                         }
                         if ($imgFiles.Count -gt 0) {
                             $badges = "[" + ($imgFiles -join ", ") + "]"
                         }
-                        $cleanText = [regex]::Replace($raw, '(?s)\[Прикрепленные изображения:[\s\S]*?\]\s*(?:Внимание агенту:[^\r\n]*\r?\n*)?', '').Trim()
+                        $cleanText = [regex]::Replace($raw, '(?s)\[Прикрепленные (?:изображения|файлы[^\:]*):[\s\S]*?\]\s*(?:Внимание агенту:[^\r\n]*\r?\n*)?', '').Trim()
                     }
 
                     if ($cleanText -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') {
@@ -4190,10 +5254,11 @@ $global:ParseTranscriptScript = {
                     } else { "" }
 
                     $currentTurn = [pscustomobject]@{
-                        UserTime   = $timeStr
-                        UserText   = $cleanText
-                        UserBadges = $badges
-                        Items      = [System.Collections.Generic.List[psobject]]::new()
+                        UserTime        = $timeStr
+                        UserText        = $cleanText
+                        UserBadges      = $badges
+                        UserAttachments = $turnAttachments.ToArray()
+                        Items           = [System.Collections.Generic.List[psobject]]::new()
                     }
 
                     if ($embeddedSys -and $embeddedSys.Count -gt 0) {
@@ -4334,7 +5399,7 @@ function Populate-ConversationTranscriptToLog {
         foreach ($turn in $renderTurns) {
             # 1. Запрос пользователя (только если не пустой): время [Вы (HH:mm:ss)], бейджи картинок [🖼️ ...], форматированный текст
             if (-not [string]::IsNullOrWhiteSpace($turn.UserText) -or -not [string]::IsNullOrWhiteSpace($turn.UserBadges)) {
-                Append-UserMessageToLog -TimeStr $turn.UserTime -Text $turn.UserText -Badges $turn.UserBadges -Document $doc
+                Append-UserMessageToLog -TimeStr $turn.UserTime -Text $turn.UserText -Badges $turn.UserBadges -Attachments $turn.UserAttachments -Document $doc
             }
 
             # 2. Элементы ответа (инструменты, текст агента, системные карточки)
