@@ -7765,19 +7765,35 @@ $btnSend.Add_Click({
     Send-AgentPrompt
 })
 
-# Выбор изображений через диалог
+
+# Выбор изображений и файлов через диалог
 $btnAttachImage.Add_Click({
     $dlg = [System.Windows.Forms.OpenFileDialog]::new()
-    $dlg.Title = "Выберите изображение или скриншот"
-    $dlg.Filter = "Изображения (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|Все файлы (*.*)|*.*"
+    $dlg.Title = "Выберите файл или изображение"
+    $dlg.Filter = "Все файлы (*.*)|*.*|Изображения (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif"
     $dlg.Multiselect = $true
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         foreach ($fn in $dlg.FileNames) {
-            Add-AttachedImageFile $fn
+            Add-AttachedItem -Path $fn
         }
         $txtPromptInput.Focus()
     }
 })
+
+# Выбор папки через диалог
+if ($btnAttachFolder) {
+    $btnAttachFolder.Add_Click({
+        $dlg = [System.Windows.Forms.FolderBrowserDialog]::new()
+        $dlg.Description = "Выберите папку для прикрепления к запросу"
+        $dlg.ShowNewFolderButton = $false
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            if ($dlg.SelectedPath) {
+                Add-AttachedItem -Path $dlg.SelectedPath
+            }
+            $txtPromptInput.Focus()
+        }
+    })
+}
 
 # Очистка прикрепленных файлов
 $btnClearAttachments.Add_Click({
