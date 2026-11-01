@@ -5353,9 +5353,9 @@ function Populate-ConversationTranscriptToLog {
         $earlierCount = 0
 
         # Виртуализация: если сообщений больше 25, отображаем последние 25 и кнопку подгрузки ранних
-        if (-not $LoadAll -and $Turns.Count -gt 25) {
-            $earlierCount = $Turns.Count - 25
-            $renderTurns = $Turns | Select-Object -Last 25
+        if (-not $LoadAll -and $Turns.Count -gt 10) {
+            $earlierCount = $Turns.Count - 10
+            $renderTurns = $Turns | Select-Object -Last 10
 
             $cardBorder = [System.Windows.Controls.Border]::new()
             $cardBorder.Background = (Get-CachedBrush "#202024")
@@ -5636,7 +5636,8 @@ function Select-ConversationItem {
         $statusDot.Fill = (Get-CachedBrush "#FFA500")
     }
 
-    $global:SuppressConvComboEvent = $true
+    if (-not $global:IsSelectingFromCombo) {
+            $global:SuppressConvComboEvent = $true
     try {
         if ($cmbConversations) {
             for ($i = 0; $i -lt $cmbConversations.Items.Count; $i++) {
@@ -5651,6 +5652,7 @@ function Select-ConversationItem {
         }
     } finally {
         $global:SuppressConvComboEvent = $false
+    }
     }
 
     # Запуск плавной неблокирующей асинхронной загрузки с красивой анимацией
@@ -5699,11 +5701,13 @@ function Reset-ToNewChat {
     Update-ContextDisplay -conversationId $null
     Update-LimitsDisplay
 
-    $global:SuppressConvComboEvent = $true
+    if (-not $global:IsSelectingFromCombo) {
+            $global:SuppressConvComboEvent = $true
     try {
         try { $cmbConversations.SelectedIndex = 0 } catch {}
     } finally {
         $global:SuppressConvComboEvent = $false
+    }
     }
     Save-LauncherConfig
 }
@@ -7310,7 +7314,10 @@ if ($borderLimitsWidget) {
 }
 
 # Выбор диалога из быстрого комбобокса
-$cmbConversations.Add_SelectionChanged({
+# Р¤СѓРЅРєС†РёСЏ Р±РµР·РѕРїР°СЃРЅРѕРіРѕ РїРµСЂРµРєР»СЋС‡РµРЅРёСЏ РґРёР°Р»РѕРіР° РёР· РІС‹РїР°РґР°СЋС‰РµРіРѕ СЃРїРёСЃРєР°
+$global:IsSelectingFromCombo = $false
+
+function Switch-ConversationFromCombo {
     if ($global:SuppressConvComboEvent) { return }
     $sel = $cmbConversations.SelectedItem
     if (-not $sel) { return }
@@ -7322,30 +7329,38 @@ $cmbConversations.Add_SelectionChanged({
     if ($targetId -and $targetId -eq $currentId) { return }
     if (-not $targetId -and -not $currentId) { return }
 
-    # РЎР±СЂРѕСЃ СЂР°СЃРєСЂС‹С‚РёСЏ РєРѕРјР±РѕР±РѕРєСЃР° РґР»СЏ РЅРµРјРµРґР»РµРЅРЅРѕРіРѕ РѕСЃРІРѕР±РѕР¶РґРµРЅРёСЏ РјС‹С€Рё
-    if ($cmbConversations.IsDropDownOpen) {
-        $cmbConversations.IsDropDownOpen = $false
-    }
-
-    if (-not $targetId) {
-        $sbReset = {
+    $global:IsSelectingFromCombo = $true
+    try {
+        if (-not $targetId) {
             Reset-ToNewChat
-        }.GetNewClosure()
-        $window.Dispatcher.BeginInvoke([Action]$sbReset, [System.Windows.Threading.DispatcherPriority]::Normal) | Out-Null
-    } else {
-        $convObj = $sel.ConvObj
-        if (-not $convObj) {
-            $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $targetId } | Select-Object -First 1
-        }
-        if ($convObj) {
-            $sbSelect = {
-                param($c)
-                Select-ConversationItem $c
+        } else {
+            $convObj = $sel.ConvObj
+            if (-not $convObj) {
+                $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $targetId } | Select-Object -First 1
+            }
+            if ($convObj) {
+                Select-ConversationItem $convObj
                 Scroll-ChatLogToEnd
-            }.GetNewClosure()
-            $window.Dispatcher.BeginInvoke([Action[object]]$sbSelect, [System.Windows.Threading.DispatcherPriority]::Normal, $convObj) | Out-Null
+            }
         }
+    } finally {
+        $global:IsSelectingFromCombo = $false
     }
+}
+
+# 1. РљР»РёРє РјС‹С€Рё РІ РІС‹РїР°РґР°СЋС‰РµРј СЃРїРёСЃРєРµ: СЃСЂР°Р±Р°С‚С‹РІР°РµС‚ СЃС‚СЂРѕРіРѕ РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃРїРёСЃРєР°, РєРѕРіРґР° РјС‹С€СЊ РѕСЃРІРѕР±РѕР¶РґРµРЅР°
+$cmbConversations.Add_DropDownClosed({
+    $window.Dispatcher.BeginInvoke([Action]{
+        Switch-ConversationFromCombo
+    }, [System.Windows.Threading.DispatcherPriority]::Input) | Out-Null
+})
+
+# 2. РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЃС‚СЂРµР»РєР°РјРё РєР»Р°РІРёР°С‚СѓСЂС‹, РєРѕРіРґР° СЃРїРёСЃРѕРє Р·Р°РєСЂС‹С‚
+$cmbConversations.Add_SelectionChanged({
+    if ($cmbConversations.IsDropDownOpen) { return }
+    $window.Dispatcher.BeginInvoke([Action]{
+        Switch-ConversationFromCombo
+    }, [System.Windows.Threading.DispatcherPriority]::Input) | Out-Null
 })
 
 # Запуск полноэкранного терминала agy
