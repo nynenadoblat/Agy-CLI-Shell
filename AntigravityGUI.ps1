@@ -7315,21 +7315,25 @@ $cmbConversations.Add_SelectionChanged({
     $sel = $cmbConversations.SelectedItem
     if (-not $sel) { return }
 
-    # Close dropdown immediately to release mouse capture
+    # Сброс раскрытия комбобокса для немедленного освобождения мыши
     if ($cmbConversations.IsDropDownOpen) {
         $cmbConversations.IsDropDownOpen = $false
     }
 
     if (-not $sel.Tag) {
-        Reset-ToNewChat
+        $window.Dispatcher.BeginInvoke([Action]{
+            Reset-ToNewChat
+        }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
     } else {
         $convObj = $sel.ConvObj
         if (-not $convObj) {
             $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $sel.Tag } | Select-Object -First 1
         }
         if ($convObj) {
-            Select-ConversationItem $convObj
-            Scroll-ChatLogToEnd
+            $window.Dispatcher.BeginInvoke([Action]{
+                Select-ConversationItem $convObj
+                Scroll-ChatLogToEnd
+            }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
         }
     }
 })
