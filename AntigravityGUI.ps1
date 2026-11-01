@@ -3143,11 +3143,13 @@ function Toggle-SystemMessageCard {
 
 function New-SystemMessageCard {
     param(
-        [Parameter(Mandatory=$true)][string]$Summary,
-        [Parameter(Mandatory=$true)][string]$Body,
+        $Summary = [regex]::Unescape("\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u043e\u0435 \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435"),
+        $Body = "",
         [switch]$StartCollapsed = $true,
         $Document = $null
     )
+    $Summary = if ($Summary -is [System.Collections.IList]) { ($Summary -join " ") } elseif ($null -eq $Summary) { "" } else { [string]$Summary }
+    $Body = if ($Body -is [System.Collections.IList]) { ($Body -join "`r`n") } elseif ($null -eq $Body) { "" } else { [string]$Body }
 
     $card = [System.Windows.Controls.Border]::new()
     $card.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F2428")
@@ -5375,8 +5377,17 @@ function Populate-ConversationTranscriptToLog {
         $Tab = $null,
         [switch]$LoadAll
     )
-    if ($Turns -and $Turns.Count -eq 1 -and ($Turns[0] -is [System.Collections.IList])) {
-        $Turns = $Turns[0]
+    $turnsList = [System.Collections.Generic.List[psobject]]::new()
+    if ($Turns -is [System.Collections.IEnumerable] -and -not ($Turns -is [string])) {
+        foreach ($item in $Turns) {
+            if ($item -is [System.Collections.IList] -and -not ($item -is [string])) {
+                foreach ($subItem in $item) { $turnsList.Add($subItem) }
+            } else {
+                $turnsList.Add($item)
+            }
+        }
+    } elseif ($null -ne $Turns) {
+        $turnsList.Add($Turns)
     }
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if (-not $doc) { return }
@@ -5384,9 +5395,9 @@ function Populate-ConversationTranscriptToLog {
     $t = if ($Tab) { $Tab } else { $global:ActiveTab }
     if ($t -and ($t -is [psobject])) {
         if ($t.PSObject.Properties['FullTranscriptTurns']) {
-            $t.FullTranscriptTurns = $Turns
+            $t.FullTranscriptTurns = $turnsList
         } else {
-            $t | Add-Member -NotePropertyName 'FullTranscriptTurns' -NotePropertyValue $Turns -Force -ErrorAction SilentlyContinue
+            $t | Add-Member -NotePropertyName 'FullTranscriptTurns' -NotePropertyValue $turnsList -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -5401,15 +5412,15 @@ function Populate-ConversationTranscriptToLog {
     $doc.Blocks.Add($pInfo)
 
     $hasMessages = $false
-    if ($Turns -and $Turns.Count -gt 0) {
+    if ($turnsList.Count -gt 0) {
         $hasMessages = $true
-        $renderTurns = $Turns
+        $renderTurns = $turnsList
         $earlierCount = 0
 
         # Виртуализация: если сообщений больше 25, отображаем последние 25 и кнопку подгрузки ранних
-        if (-not $LoadAll -and $Turns.Count -gt 10) {
-            $earlierCount = $Turns.Count - 10
-            $renderTurns = $Turns | Select-Object -Last 10
+        if (-not $LoadAll -and $turnsList.Count -gt 10) {
+            $earlierCount = $turnsList.Count - 10
+            $renderTurns = $turnsList | Select-Object -Last 10
 
             $cardBorder = [System.Windows.Controls.Border]::new()
             $cardBorder.Background = (Get-CachedBrush "#202024")
@@ -5438,7 +5449,7 @@ function Populate-ConversationTranscriptToLog {
 
             $targetTab = $t
             $targetDoc = $doc
-            $targetTurns = $Turns
+            $targetTurns = $turnsList
             $targetCid = $conversationId
             $cardBorder.Add_PreviewMouseLeftButtonDown({
                 param($s, $e)
@@ -5587,7 +5598,7 @@ function Update-TabLoadingJobs {
         # Watchdog: force-hide overlay after 2.5s or if active tab has no loading job
         if ($loadingOverlay -and $loadingOverlay.Visibility -eq [System.Windows.Visibility]::Visible) {
             $nowUtc = [DateTime]::UtcNow
-            if ($global:LoadingOverlayStartTime -and ($nowUtc - $global:LoadingOverlayStartTime).TotalSeconds -gt 2.5) {
+            if ($global:LoadingOverlayStartTime -and ($nowUtc - $global:LoadingOverlayStartTime).TotalSeconds -gt 15.0) {
                 Hide-LoadingOverlay
             }
             if ($global:ActiveTab -and -not $global:ActiveTab.LoadingJob) {
@@ -5606,10 +5617,10 @@ function Update-TabLoadingJobs {
                     $turns = @()
                     try {
                         if ($job.AsyncResult.IsCompleted) {
-                            $rawTurns = $job.PowerShell.EndInvoke($job.AsyncResult)
-                            if ($rawTurns) {
+                            $rawTurns = @($job.PowerShell.EndInvoke($job.AsyncResult))
+                            if ($rawTurns.Count -gt 0) {
                                 if ($rawTurns.Count -eq 1 -and ($rawTurns[0] -is [System.Collections.IList])) {
-                                    $turns = $rawTurns[0]
+                                    $turns = @($rawTurns[0])
                                 } else {
                                     $turns = $rawTurns
                                 }
@@ -5667,8 +5678,8 @@ function Render-ConversationTranscriptToLog {
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
     if (-not (Test-Path $tPath)) { return $false }
 
-    $turns = & $global:ParseTranscriptScript $tPath
-    if (-not $turns -or $turns.Count -eq 0) {
+    $turns = @(& $global:ParseTranscriptScript $tPath)
+    if ($turns.Count -eq 0) {
         return $false
     }
 
@@ -7413,10 +7424,17 @@ function Switch-ConversationFromCombo {
             if (-not $convObj) {
                 $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $targetId } | Select-Object -First 1
             }
-            if ($convObj) {
-                Select-ConversationItem $convObj
-                Scroll-ChatLogToEnd
+            if (-not $convObj) {
+                $fallbackTitle = if ($sel.TitleStr) { $sel.TitleStr } else { [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 ") + $targetId }
+                $convObj = [pscustomobject]@{
+                    Id           = $targetId
+                    Title        = $fallbackTitle
+                    Workspace    = ""
+                    LastModified = [DateTime]::UtcNow
+                }
             }
+            Select-ConversationItem $convObj
+            Scroll-ChatLogToEnd
         }
     } finally {
         $global:IsSelectingFromCombo = $false
