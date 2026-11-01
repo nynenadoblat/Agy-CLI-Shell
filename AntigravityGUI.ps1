@@ -713,7 +713,7 @@ function Show-ImageViewerWindow {
         $fn = [System.IO.Path]::GetFileName($FilePath)
         $candidates = @(
             (Join-Path $launcherDir "attachments\$fn"),
-            (if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" })
+            ($(if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" }))
         )
         $found = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
         if ($found) {
@@ -2718,8 +2718,6 @@ function Append-UserMessageToLog {
     $effFontSize = if ($global:CurrentFontSize -and $global:CurrentFontSize -gt 0) { [double]$global:CurrentFontSize } else { 13.0 }
     $calcLineHeight = [math]::Round([math]::Max(20.0, $effFontSize * 1.55))
 
-    $headerText = if ($TimeStr) { "[Вы ($TimeStr)]: " } else { "[Вы]: " }
-
     $lines = $Text -split "\r?\n"
     $firstLine = if ($lines.Length -gt 0) { $lines[0] } else { "" }
 
@@ -2728,32 +2726,19 @@ function Append-UserMessageToLog {
     $p.LineHeight = $calcLineHeight
     $p.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
 
-    # 1. Заголовок [Вы (HH:mm:ss)]:
-    $headerRun = [System.Windows.Documents.Run]::new($headerText)
-    $headerRun.Foreground = Get-CachedBrush "#4FC1FF"
-    $headerRun.FontWeight = [System.Windows.FontWeights]::Bold
-    $p.Inlines.Add($headerRun)
-
-    if ($IsQueued) {
-        $qRun = [System.Windows.Documents.Run]::new("⏳ [В очереди] ")
-        $qRun.Foreground = Get-CachedBrush "#F0883E"
-        $qRun.FontWeight = [System.Windows.FontWeights]::Bold
-        $p.Inlines.Add($qRun)
-    }
-
-    # 2. Бейджи прикрепленных файлов: интерактивные кликабельные плашки для изображений и документов
+    # 1. Р‘РµР№РґР¶Рё РїСЂРёРєСЂРµРїР»РµРЅРЅС‹С… С„Р°Р№Р»РѕРІ: РёРЅС‚РµСЂР°РєС‚РёРІРЅС‹Рµ РєР»РёРєР°Р±РµР»СЊРЅС‹Рµ РїР»Р°С€РєРё РґР»СЏ РёР·РѕР±СЂР°Р¶РµРЅРёР№ Рё РґРѕРєСѓРјРµРЅС‚РѕРІ
     $activeAttachments = @()
     if ($Attachments) {
         $activeAttachments = @($Attachments)
     } elseif (-not [string]::IsNullOrEmpty($Badges)) {
-        # Резервный разбор имен файлов из строки [🖼️ filename1, 🎯 filename2]
+        # Р РµР·РµСЂРІРЅС‹Р№ СЂР°Р·Р±РѕСЂ РёРјРµРЅ С„Р°Р№Р»РѕРІ РёР· СЃС‚СЂРѕРєРё [рџ–јпёЏ filename1, рџЋЇ filename2]
         $extracted = [System.Collections.Generic.List[psobject]]::new()
-        foreach ($bm in [regex]::Matches($Badges, '(?m)[🖼️🎯]\s*([^,\]]+)')) {
-            $fn = $bm.Groups[1].Value.Trim()
+        foreach ($rawItem in ($Badges.Trim(' []') -split ',')) {
+            $fn = ($rawItem.Trim() -replace '^[^\w\.\-]+', '').Trim()
             if ($fn) {
                 $cand = @(
                     (Join-Path (Get-AttachmentsDirectory) $fn),
-                    (if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" }),
+                    ($(if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" })),
                     (Join-Path $launcherDir "attachments\$fn")
                 ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
                 $fPath = if ($cand) { $cand } else { $fn }
@@ -2765,6 +2750,26 @@ function Append-UserMessageToLog {
             }
         }
         $activeAttachments = @($extracted)
+    }
+
+    $hasBadges = (@($activeAttachments).Length -gt 0)
+    $headerText = if ($TimeStr) {
+        if ($hasBadges) { "[Вы ($TimeStr)]:" } else { "[Вы ($TimeStr)]: " }
+    } else {
+        if ($hasBadges) { "[Вы]:" } else { "[Вы]: " }
+    }
+
+    # 2. Р—Р°РіРѕР»РѕРІРѕРє [Р’С‹ (HH:mm:ss)]:
+    $headerRun = [System.Windows.Documents.Run]::new($headerText)
+    $headerRun.Foreground = Get-CachedBrush "#4FC1FF"
+    $headerRun.FontWeight = [System.Windows.FontWeights]::Bold
+    $p.Inlines.Add($headerRun)
+
+    if ($IsQueued) {
+        $qRun = [System.Windows.Documents.Run]::new("⏳ [В очереди] ")
+        $qRun.Foreground = Get-CachedBrush "#F0883E"
+        $qRun.FontWeight = [System.Windows.FontWeights]::Bold
+        $p.Inlines.Add($qRun)
     }
 
     if (@($activeAttachments).Length -gt 0) {
@@ -2866,7 +2871,11 @@ function Append-UserMessageToLog {
 
             $uic = [System.Windows.Documents.InlineUIContainer]::new($badgeBorder)
             $p.Inlines.Add($uic)
-            $p.Inlines.Add([System.Windows.Documents.Run]::new(" "))
+            $badgeText = "[$($iconTb.Text.Trim()) $attName] "
+            $accRun = [System.Windows.Documents.Run]::new($badgeText)
+            $accRun.FontSize = 1.0
+            $accRun.Foreground = [System.Windows.Media.Brushes]::Transparent
+            $p.Inlines.Add($accRun)
         }
     }
     # 3. Первая строка сообщения пользователя - строго на той же строке
@@ -5486,17 +5495,14 @@ function Start-AsyncTranscriptLoad {
     )
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
 
-    # Неблокирующая фоновая отмена предыдущей задачи загрузки на этой вкладке
+    # Р‘РµР·РѕРїР°СЃРЅР°СЏ РѕС‚РјРµРЅР° РїСЂРµРґС‹РґСѓС‰РµР№ Р·Р°РґР°С‡Рё Р·Р°РіСЂСѓР·РєРё РЅР° СЌС‚РѕР№ РІРєР»Р°РґРєРµ
     if ($Tab.LoadingJob) {
         $oldJob = $Tab.LoadingJob
         $Tab.LoadingJob = $null
-        [System.Threading.ThreadPool]::QueueUserWorkItem({
-            param($j)
-            try {
-                $j.PowerShell.Stop()
-                $j.PowerShell.Dispose()
-            } catch {}
-        }, $oldJob) | Out-Null
+        try {
+            $oldJob.PowerShell.Stop()
+            $oldJob.PowerShell.Dispose()
+        } catch {}
     }
 
     if (-not (Test-Path $tPath)) {
@@ -5669,13 +5675,10 @@ function Reset-ToNewChat {
         if ($tab.LoadingJob) {
             $oldJob = $tab.LoadingJob
             $tab.LoadingJob = $null
-            [System.Threading.ThreadPool]::QueueUserWorkItem({
-                param($j)
-                try {
-                    $j.PowerShell.Stop()
-                    $j.PowerShell.Dispose()
-                } catch {}
-            }, $oldJob) | Out-Null
+            try {
+                $oldJob.PowerShell.Stop()
+                $oldJob.PowerShell.Dispose()
+            } catch {}
         }
         Hide-LoadingOverlay
         $tab.ConversationId = $null
@@ -6823,17 +6826,14 @@ function global:Stop-ProcessTree([int]$processId) {
 function global:Close-Tab {
     param([Parameter(Mandatory=$true)]$Tab)
     
-    # Неблокирующее освобождение ресурсов фоновой загрузки
+    # Р‘РµР·РѕРїР°СЃРЅРѕРµ РѕСЃРІРѕР±РѕР¶РґРµРЅРёРµ СЂРµСЃСѓСЂСЃРѕРІ С„РѕРЅРѕРІРѕР№ Р·Р°РіСЂСѓР·РєРё
     if ($Tab.LoadingJob) {
         $oldJob = $Tab.LoadingJob
         $Tab.LoadingJob = $null
-        [System.Threading.ThreadPool]::QueueUserWorkItem({
-            param($j)
-            try {
-                $j.PowerShell.Stop()
-                $j.PowerShell.Dispose()
-            } catch {}
-        }, $oldJob) | Out-Null
+        try {
+            $oldJob.PowerShell.Stop()
+            $oldJob.PowerShell.Dispose()
+        } catch {}
     }
 
     # Если на вкладке выполняется процесс, принудительно останавливаем его дерево
@@ -7348,19 +7348,18 @@ function Switch-ConversationFromCombo {
     }
 }
 
-# 1. РљР»РёРє РјС‹С€Рё РІ РІС‹РїР°РґР°СЋС‰РµРј СЃРїРёСЃРєРµ: СЃСЂР°Р±Р°С‚С‹РІР°РµС‚ СЃС‚СЂРѕРіРѕ РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃРїРёСЃРєР°, РєРѕРіРґР° РјС‹С€СЊ РѕСЃРІРѕР±РѕР¶РґРµРЅР°
+# 1. Р’С‹Р±РѕСЂ РґРёР°Р»РѕРіР° РёР· РІС‹РїР°РґР°СЋС‰РµРіРѕ СЃРїРёСЃРєР° РјС‹С€СЊСЋ (СЃС‚СЂРѕРіРѕ РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃРїРёСЃРєР°, РєРѕРіРґР° РјС‹С€СЊ РѕСЃРІРѕР±РѕР¶РґРµРЅР°)
 $cmbConversations.Add_DropDownClosed({
-    $window.Dispatcher.BeginInvoke([Action]{
-        Switch-ConversationFromCombo
-    }, [System.Windows.Threading.DispatcherPriority]::Input) | Out-Null
+    Switch-ConversationFromCombo
 })
 
-# 2. РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЃС‚СЂРµР»РєР°РјРё РєР»Р°РІРёР°С‚СѓСЂС‹, РєРѕРіРґР° СЃРїРёСЃРѕРє Р·Р°РєСЂС‹С‚
-$cmbConversations.Add_SelectionChanged({
-    if ($cmbConversations.IsDropDownOpen) { return }
-    $window.Dispatcher.BeginInvoke([Action]{
+# 2. Р’С‹Р±РѕСЂ РґРёР°Р»РѕРіР° СЃ РєР»Р°РІРёР°С‚СѓСЂС‹ РєР»Р°РІРёС€РµР№ Enter
+$cmbConversations.Add_KeyDown({
+    param($s, $e)
+    if ($e.Key -eq [System.Windows.Input.Key]::Enter) {
+        $e.Handled = $true
         Switch-ConversationFromCombo
-    }, [System.Windows.Threading.DispatcherPriority]::Input) | Out-Null
+    }
 })
 
 # Запуск полноэкранного терминала agy
