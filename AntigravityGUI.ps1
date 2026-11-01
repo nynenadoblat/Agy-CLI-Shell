@@ -2709,9 +2709,9 @@ function Append-MarkdownFormatted {
 
 function Append-UserMessageToLog {
     param(
-        [string]$TimeStr = "",
-        [Parameter(Mandatory=$true)][string]$Text,
-        [string]$Badges = "",
+        [object]$TimeStr = "",
+        [object]$Text = "",
+        [object]$Badges = "",
         $Attachments = $null,
         $Document = $null,
         [switch]$IsQueued
@@ -2719,10 +2719,14 @@ function Append-UserMessageToLog {
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if (-not $doc) { return }
 
+    $cleanTime = if ($TimeStr -is [System.Collections.IList]) { [string]$TimeStr[0] } else { [string]$TimeStr }
+    $cleanText = if ($Text -is [System.Collections.IList]) { [string]($Text -join "`r`n") } else { [string]$Text }
+    $cleanBadges = if ($Badges -is [System.Collections.IList]) { [string]($Badges -join " ") } else { [string]$Badges }
+
     $effFontSize = if ($global:CurrentFontSize -and $global:CurrentFontSize -gt 0) { [double]$global:CurrentFontSize } else { 13.0 }
     $calcLineHeight = [math]::Round([math]::Max(20.0, $effFontSize * 1.55))
 
-    $lines = $Text -split "\r?\n"
+    $lines = $cleanText -split "\r?\n"
     $firstLine = if ($lines.Length -gt 0) { $lines[0] } else { "" }
 
     $p = [System.Windows.Documents.Paragraph]::new()
@@ -2757,8 +2761,8 @@ function Append-UserMessageToLog {
     }
 
     $hasBadges = (@($activeAttachments).Length -gt 0)
-    $headerText = if ($TimeStr) {
-        if ($hasBadges) { "[Вы ($TimeStr)]:" } else { "[Вы ($TimeStr)]: " }
+    $headerText = if ($cleanTime) {
+        if ($hasBadges) { "[Вы ($cleanTime)]:" } else { "[Вы ($cleanTime)]: " }
     } else {
         if ($hasBadges) { "[Вы]:" } else { "[Вы]: " }
     }
@@ -5010,7 +5014,7 @@ function Get-ConversationPreviewText {
                 $lineNum++
                 if ($line.Contains('"USER_INPUT"')) {
                     try {
-                        $step = $line | ConvertFrom-Json
+                        $step = ConvertFrom-Json -InputObject $line
                         if ($step.type -eq "USER_INPUT" -and $step.content) {
                             $c = $step.content
                             if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') { $c = $matches[1].Trim() }
@@ -5117,7 +5121,7 @@ function Load-ConversationTranscript {
                 $line = $sr.ReadLine()
                 if ([string]::IsNullOrWhiteSpace($line)) { continue }
                 try {
-                    $step = $line | ConvertFrom-Json
+                    $step = ConvertFrom-Json -InputObject $line
                     if ($step.type -eq "USER_INPUT") {
                         $c = $step.content
                         if ($c -match '<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>') {
@@ -5191,23 +5195,16 @@ $global:ParseTranscriptScript = {
     $activeTools = [System.Collections.Generic.List[psobject]]::new()
 
     try {
-        $fi = [System.IO.FileInfo]::new($path)
-        $maxBytes = 262144
         $fs = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         try {
-            if ($fi.Length -gt $maxBytes) {
-                $seekPos = $fi.Length - $maxBytes
-                $fs.Seek($seekPos, [System.IO.SeekOrigin]::Begin) | Out-Null
-            }
             $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8)
-            if ($fi.Length -gt $maxBytes) { [void]$sr.ReadLine() }
             while (-not $sr.EndOfStream) {
             $line = $sr.ReadLine()
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             if (-not ($line.Contains('"USER_INPUT"') -or $line.Contains('"PLANNER_RESPONSE"') -or $line.Contains('"SYSTEM_MESSAGE"') -or $line.Contains('SYSTEM_MESSAGE'))) { continue }
 
             try {
-                $step = $line | ConvertFrom-Json
+                $step = ConvertFrom-Json -InputObject $line
                 if ($step.type -eq "SYSTEM_MESSAGE") {
                     $rawSys = $step.content
                     $sysList = Parse-SystemMessageText $rawSys
@@ -5316,7 +5313,16 @@ $global:ParseTranscriptScript = {
                         }
                     }
                 }
-                elseif ($step.type -eq "PLANNER_RESPONSE" -and $currentTurn) {
+                elseif ($step.type -eq "PLANNER_RESPONSE") {
+                    if (-not $currentTurn) {
+                        $currentTurn = [pscustomobject]@{
+                            UserTime        = ""
+                            UserText        = ""
+                            UserBadges      = ""
+                            UserAttachments = @()
+                            Items           = [System.Collections.Generic.List[psobject]]::new()
+                        }
+                    }
                     if ($step.tool_calls) {
                         foreach ($tc in $step.tool_calls) {
                             $summary = ""
@@ -5358,7 +5364,7 @@ $global:ParseTranscriptScript = {
         $turns.Add($currentTurn)
     }
 
-    return , $turns.ToArray()
+    return $turns
 }
 
 function Populate-ConversationTranscriptToLog {
@@ -5369,6 +5375,9 @@ function Populate-ConversationTranscriptToLog {
         $Tab = $null,
         [switch]$LoadAll
     )
+    if ($Turns -and $Turns.Count -eq 1 -and ($Turns[0] -is [System.Collections.IList])) {
+        $Turns = $Turns[0]
+    }
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if (-not $doc) { return }
 
@@ -5590,7 +5599,7 @@ function Update-TabLoadingJobs {
         foreach ($t in @($global:TabsList)) {
             if ($t.LoadingJob) {
                 $job = $t.LoadingJob
-                $isTimedOut = ($job.StartTime -and ([DateTime]::UtcNow - $job.StartTime).TotalSeconds -gt 3.5)
+                $isTimedOut = ($job.StartTime -and ([DateTime]::UtcNow - $job.StartTime).TotalSeconds -gt 25.0)
 
                 if ($job.AsyncResult.IsCompleted -or $isTimedOut) {
                     $t.LoadingJob = $null
@@ -5598,7 +5607,13 @@ function Update-TabLoadingJobs {
                     try {
                         if ($job.AsyncResult.IsCompleted) {
                             $rawTurns = $job.PowerShell.EndInvoke($job.AsyncResult)
-                            if ($rawTurns) { $turns = $rawTurns }
+                            if ($rawTurns) {
+                                if ($rawTurns.Count -eq 1 -and ($rawTurns[0] -is [System.Collections.IList])) {
+                                    $turns = $rawTurns[0]
+                                } else {
+                                    $turns = $rawTurns
+                                }
+                            }
                         }
                     } catch {}
                     finally {
