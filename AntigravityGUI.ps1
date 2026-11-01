@@ -2194,12 +2194,15 @@ function Scroll-ChatLogToEnd {
     } catch {}
 }
 
+$global:LoadingOverlayStartTime = $null
+
 function Show-LoadingOverlay {
     param(
         [string]$Title = "Загрузка диалога...",
         [string]$Subtitle = "Считывание истории и форматирование..."
     )
     if (-not $loadingOverlay) { return }
+    $global:LoadingOverlayStartTime = [DateTime]::UtcNow
     if ($txtLoadingTitle) { $txtLoadingTitle.Text = $Title }
     if ($txtLoadingSubtitle) { $txtLoadingSubtitle.Text = $Subtitle }
     $loadingOverlay.Visibility = [System.Windows.Visibility]::Visible
@@ -2208,6 +2211,7 @@ function Show-LoadingOverlay {
 function Hide-LoadingOverlay {
     if (-not $loadingOverlay) { return }
     $loadingOverlay.Visibility = [System.Windows.Visibility]::Collapsed
+    $global:LoadingOverlayStartTime = $null
 }
 
 function Append-ChatFormatted {
@@ -3083,13 +3087,13 @@ function Parse-SystemMessageText([string]$text) {
     $results = [System.Collections.Generic.List[psobject]]::new()
     if ([string]::IsNullOrWhiteSpace($text)) { return @() }
     $pattern = '(?s)<SYSTEM_MESSAGE>\s*(.*?)\s*</SYSTEM_MESSAGE>'
-    $matches = [regex]::Matches($text, $pattern)
-    if ($matches.Count -gt 0) {
-        foreach ($m in $matches) {
-            $body = $m.Groups[1].Value.Trim()
-            $summary = ""
-            if ($body -match 'content=([^\r\n]+)') {
-                $summary = $matches[1].Trim()
+        $sysMatches = [regex]::Matches($text, $pattern)
+        if ($sysMatches.Count -gt 0) {
+            foreach ($m in $sysMatches) {
+                $body = $m.Groups[1].Value.Trim()
+                $summary = ""
+                if ($body -match 'content=([^\r\n]+)') {
+                    $summary = if ($Matches.Count -gt 1) { $Matches[1].Trim() } else { [regex]::Unescape("\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u043e\u0435 \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435") }
             } else {
                 $firstLine = ($body -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
                 $summary = if ($firstLine) { $firstLine.Trim() } else { "Системное уведомление" }
@@ -4385,11 +4389,20 @@ function Test-ModelQuotaLive {
     return $null
 }
 
+$script:dailyUsageStatsCache = @{}
+$script:dailyUsageStatsCacheTime = [DateTime]::MinValue
+
 function Get-DailyUsageStats {
     param(
         [string]$modelName = "gemini-3.8-flash-high",
         [switch]$ForceRefresh
     )
+    $now = [DateTime]::Now
+    if (-not $ForceRefresh -and $script:dailyUsageStatsCache -and (($now - $script:dailyUsageStatsCacheTime).TotalSeconds -lt 20)) {
+        if ($script:dailyUsageStatsCache.ContainsKey($modelName)) {
+            return $script:dailyUsageStatsCache[$modelName]
+        }
+    }
     $quota = Get-ModelQuotaLimits -modelName $modelName
     $grp = Get-ModelQuotaGroup -modelName $modelName
     $now = [DateTime]::Now
@@ -4456,36 +4469,45 @@ function Get-DailyUsageStats {
         foreach ($f in $folders) {
             $tPath = Join-Path $f.FullName ".system_generated\logs\transcript.jsonl"
             if (Test-Path $tPath) {
-                $lines = Get-Content -Path $tPath -Encoding utf8 -ErrorAction SilentlyContinue
-                if ($lines) {
-                    foreach ($line in $lines) {
-                        if ($line -match '"type":\s*"USER_INPUT"') {
-                            $baseReqs++
+                try {
+                    $fi = [System.IO.FileInfo]::new($tPath)
+                    $maxScan = 131072
+                    $fs = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    try {
+                        if ($fi.Length -gt $maxScan) {
+                            $fs.Seek($fi.Length - $maxScan, [System.IO.SeekOrigin]::Begin) | Out-Null
                         }
-                        if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
-                            if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
-                            if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
-                            if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
-                            if ($line -match '"created_at":\s*"([^"]+)"') {
-                                try {
-                                    $stepTime = [DateTime]::Parse($Matches[1])
-                                    if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
-                                } catch {}
+                        $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8)
+                        if ($fi.Length -gt $maxScan) { [void]$sr.ReadLine() }
+                        while (-not $sr.EndOfStream) {
+                            $line = $sr.ReadLine()
+                            if ($line -match '"type":\s*"USER_INPUT"') {
+                                $baseReqs++
+                            }
+                            if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
+                                if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
+                                if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
+                                if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
+                                if ($line -match '"created_at":\s*"([^"]+)"') {
+                                    try {
+                                        $stepTime = [DateTime]::Parse($Matches[1])
+                                        if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
+                                    } catch {}
+                                }
                             }
                         }
-                    }
-                }
+                    } finally { $fs.Dispose() }
+                } catch {}
             }
         }
     }
-
     $rpmVelocity = [math]::Round(($recentReqs / 5.0), 1)
     $totalReqs = $baseReqs + $global:SessionRequestsDelta
     $rpdPct = if ($quota.MaxRpd -gt 0) { [math]::Round(($totalReqs / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
     $remRpd = [math]::Max(0, ($quota.MaxRpd - $totalReqs))
     $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
 
-    return [pscustomobject]@{
+    $resObj = [pscustomobject]@{
         ModelName              = $modelName
         DisplayName            = $quota.DisplayName
         GroupName              = $grpDisplayName
@@ -4518,6 +4540,9 @@ function Get-DailyUsageStats {
         LiveClaudeGpt          = $(if ($live) { $live.claude_gpt } else { $null })
         ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`nНажмите для открытия подробного дашборда квот."
     }
+    $script:dailyUsageStatsCache[$modelName] = $resObj
+    $script:dailyUsageStatsCacheTime = [DateTime]::Now
+    return $resObj
 }
 
 function Update-LimitsDisplay {
@@ -4533,18 +4558,18 @@ function Update-LimitsDisplay {
 
     $stats = Get-DailyUsageStats -modelName $modelName
 
-    # 1. Полоса прогресса недельного остатка квоты
+    # 1. РџРѕР»РѕСЃР° РїСЂРѕРіСЂРµСЃСЃР° РЅРµРґРµР»СЊРЅРѕРіРѕ РѕСЃС‚Р°С‚РєР° РєРІРѕС‚С‹
     if ($prgLimits) {
         $prgLimits.Value = $stats.WeeklyPercent
         $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
     }
 
-    # 2. Текст остатка недели
+    # 2. РўРµРєСЃС‚ РѕСЃС‚Р°С‚РєР° РЅРµРґРµР»Рё
     if ($txtLimitsSummary) {
-        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { "Неделя: 0.0%" } else { "Неделя: $($stats.WeeklyPercent)%" }
+        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { [regex]::Unescape("\u041d\u0435\u0434\u0435\u043b\u044f: 0.0%") } else { [regex]::Unescape("\u041d\u0435\u0434\u0435\u043b\u044f: $($stats.WeeklyPercent)%") }
     }
 
-    # 3. Бейдж процента доступности
+    # 3. Р‘РµР№РґР¶ РїСЂРѕС†РµРЅС‚Р° РґРѕСЃС‚СѓРїРЅРѕСЃС‚Рё
     if ($txtLimitsPercent) {
         $txtLimitsPercent.Text = if ($stats.IsApiBlocked) { "0%" } else { "$([math]::Round($stats.WeeklyPercent))%" }
         $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
@@ -4554,22 +4579,25 @@ function Update-LimitsDisplay {
         $borderLimitsBadge.BorderBrush = (Get-CachedBrush $stats.BadgeBorder)
     }
 
-    # 4. Тултип
+    # 4. РўСѓР»С‚РёРї
     if ($borderLimitsWidget) {
         $borderLimitsWidget.ToolTip = $stats.ToolTipText
     }
 
-    # 5. Управление состоянием поля ввода и отправки по статусу квоты
+    # 5. РЈРїСЂР°РІР»РµРЅРёРµ СЃРѕСЃС‚РѕСЏРЅРёРµРј РїРѕР»СЏ РІРІРѕРґР° Рё РѕС‚РїСЂР°РІРєРё РїРѕ СЃС‚Р°С‚СѓСЃСѓ РєРІРѕС‚С‹
     $activeTab = if ($null -ne $global:ActiveTab) { $global:ActiveTab } else { $null }
-    if ($activeTab -and -not $activeTab.SyncState.IsRunning) {
-        if ($stats.IsApiBlocked) {
-            if ($btnSend) { $btnSend.IsEnabled = $false }
-            if ($txtStatus) { $txtStatus.Text = "⛔ Лимит API исчерпан (сброс через $($stats.ResetCountdown))" }
-            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149") }
+    if ($stats.IsApiBlocked) {
+        if ($btnSend) { $btnSend.IsEnabled = $false }
+        if ($txtStatus) { $txtStatus.Text = [regex]::Unescape("\u26d4 \u041b\u0438\u043c\u0438\u0442 API \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d (\u0441\u0431\u0440\u043e\u0441 \u0447\u0435\u0440\u0435\u0437 $($stats.ResetCountdown))") }
+        if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149") }
+    } else {
+        if ($btnSend) { $btnSend.IsEnabled = $true }
+        if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
+        if ($activeTab -and $activeTab.StatusText -match [regex]::Unescape("\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430")) {
+            if ($txtStatus) { $txtStatus.Text = $activeTab.StatusText }
+            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#FFA500") }
         } else {
-            if ($btnSend) { $btnSend.IsEnabled = $true }
-            if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
-            if ($txtStatus) { $txtStatus.Text = "Готов к работе" }
+            if ($txtStatus) { $txtStatus.Text = [regex]::Unescape("\u0413\u043e\u0442\u043e\u0432 \u043a \u0440\u0430\u0431\u043e\u0442\u0435") }
             if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50") }
         }
     }
@@ -5126,13 +5154,13 @@ $global:ParseTranscriptScript = {
         $results = [System.Collections.Generic.List[psobject]]::new()
         if ([string]::IsNullOrWhiteSpace($text)) { return @() }
         $pattern = '(?s)<SYSTEM_MESSAGE>\s*(.*?)\s*</SYSTEM_MESSAGE>'
-        $matches = [regex]::Matches($text, $pattern)
-        if ($matches.Count -gt 0) {
-            foreach ($m in $matches) {
+        $sysMatches = [regex]::Matches($text, $pattern)
+        if ($sysMatches.Count -gt 0) {
+            foreach ($m in $sysMatches) {
                 $body = $m.Groups[1].Value.Trim()
                 $summary = ""
                 if ($body -match 'content=([^\r\n]+)') {
-                    $summary = $matches[1].Trim()
+                    $summary = if ($Matches.Count -gt 1) { $Matches[1].Trim() } else { [regex]::Unescape("\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u043e\u0435 \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u0435") }
                 } else {
                     $firstLine = ($body -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
                     $summary = if ($firstLine) { $firstLine.Trim() } else { "Системное уведомление" }
@@ -5163,8 +5191,16 @@ $global:ParseTranscriptScript = {
     $activeTools = [System.Collections.Generic.List[psobject]]::new()
 
     try {
-        $sr = [System.IO.StreamReader]::new($path, [System.Text.Encoding]::UTF8)
+        $fi = [System.IO.FileInfo]::new($path)
+        $maxBytes = 262144
+        $fs = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         try {
+            if ($fi.Length -gt $maxBytes) {
+                $seekPos = $fi.Length - $maxBytes
+                $fs.Seek($seekPos, [System.IO.SeekOrigin]::Begin) | Out-Null
+            }
+            $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8)
+            if ($fi.Length -gt $maxBytes) { [void]$sr.ReadLine() }
             while (-not $sr.EndOfStream) {
             $line = $sr.ReadLine()
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -5310,7 +5346,7 @@ $global:ParseTranscriptScript = {
             } catch {}
         }
     } finally {
-        if ($sr) { $sr.Dispose() }
+        if ($fs) { $fs.Dispose() }
     }
 } catch {}
 
@@ -5322,7 +5358,7 @@ $global:ParseTranscriptScript = {
         $turns.Add($currentTurn)
     }
 
-    return $turns.ToArray()
+    return , $turns.ToArray()
 }
 
 function Populate-ConversationTranscriptToLog {
@@ -5495,19 +5531,18 @@ function Start-AsyncTranscriptLoad {
     )
     $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
 
-    # Р‘РµР·РѕРїР°СЃРЅР°СЏ РѕС‚РјРµРЅР° РїСЂРµРґС‹РґСѓС‰РµР№ Р·Р°РґР°С‡Рё Р·Р°РіСЂСѓР·РєРё РЅР° СЌС‚РѕР№ РІРєР»Р°РґРєРµ
+    # Р‘РµР·РѕРїР°СЃРЅРѕРµ РѕСЃРІРѕР±РѕР¶РґРµРЅРёРµ РїСЂРµРґС‹РґСѓС‰РµР№ Р·Р°РґР°С‡Рё Р·Р°РіСЂСѓР·РєРё
     if ($Tab.LoadingJob) {
         $oldJob = $Tab.LoadingJob
         $Tab.LoadingJob = $null
         try {
-            $oldJob.PowerShell.Stop()
             $oldJob.PowerShell.Dispose()
         } catch {}
     }
 
     if (-not (Test-Path $tPath)) {
         Populate-ConversationTranscriptToLog -Turns @() -conversationId $conversationId -Document $Tab.Document -Tab $Tab
-        $Tab.StatusText = "Диалог загружен, готов к продолжению"
+        $Tab.StatusText = [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d, \u0433\u043e\u0442\u043e\u0432 \u043a \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u044e")
         $Tab.StatusColor = "#4CAF50"
         if ($Tab.HeaderDot) { $Tab.HeaderDot.Fill = (Get-CachedBrush "#4CAF50") }
         if ($Tab -eq $global:ActiveTab) {
@@ -5519,10 +5554,10 @@ function Start-AsyncTranscriptLoad {
         return
     }
 
-    # Показываем оверлей загрузки для активной вкладки
+    # РџРѕРєР°Р·С‹РІР°РµРј РѕРІРµСЂР»РµР№ Р·Р°РіСЂСѓР·РєРё РґР»СЏ Р°РєС‚РёРІРЅРѕР№ РІРєР»Р°РґРєРё
     if ($Tab -eq $global:ActiveTab) {
-        $sub = if ($Tab.Title) { $Tab.Title } else { "Считывание истории..." }
-        Show-LoadingOverlay -Title "Загрузка диалога..." -Subtitle $sub
+        $sub = if ($Tab.Title) { $Tab.Title } else { [regex]::Unescape("\u0421\u0447\u0438\u0442\u044b\u0432\u0430\u043d\u0438\u0435 \u0438\u0441\u0442\u043e\u0440\u0438\u0438...") }
+        Show-LoadingOverlay -Title [regex]::Unescape("\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0434\u0438\u0430\u043b\u043e\u0433\u0430...") -Subtitle $sub
     }
 
     $ps = [powershell]::Create()
@@ -5539,39 +5574,62 @@ function Start-AsyncTranscriptLoad {
 }
 
 function Update-TabLoadingJobs {
-    if (-not $global:TabsList) { return }
-    foreach ($t in @($global:TabsList)) {
-        if ($t.LoadingJob -and $t.LoadingJob.AsyncResult.IsCompleted) {
-            $job = $t.LoadingJob
-            $t.LoadingJob = $null
-            $turns = @()
-            try {
-                $rawTurns = $job.PowerShell.EndInvoke($job.AsyncResult)
-                $job.PowerShell.Dispose()
-                if ($rawTurns) { $turns = $rawTurns }
-            } catch {
-                try { $job.PowerShell.Dispose() } catch {}
+    try {
+        # Watchdog: force-hide overlay after 2.5s or if active tab has no loading job
+        if ($loadingOverlay -and $loadingOverlay.Visibility -eq [System.Windows.Visibility]::Visible) {
+            $nowUtc = [DateTime]::UtcNow
+            if ($global:LoadingOverlayStartTime -and ($nowUtc - $global:LoadingOverlayStartTime).TotalSeconds -gt 2.5) {
+                Hide-LoadingOverlay
             }
-
-            # Проверяем, что ID диалога на вкладке не сменился за время фоновой загрузки
-            if ($job.ConvId -eq $t.ConversationId) {
-                Populate-ConversationTranscriptToLog -Turns $turns -conversationId $job.ConvId -Document $t.Document -Tab $t
-
-                $t.StatusText = "Диалог загружен, готов к продолжению"
-                $t.StatusColor = "#4CAF50"
-                if ($t.HeaderDot) {
-                    $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50")
-                }
-
-                if ($t -eq $global:ActiveTab) {
-                    Hide-LoadingOverlay
-                    $txtStatus.Text = $t.StatusText
-                    $statusDot.Fill = (Get-CachedBrush "#4CAF50")
-                    Scroll-ChatLogToEnd
-                    Update-ContextDisplay -conversationId $job.ConvId -modelName $t.Model
-                }
+            if ($global:ActiveTab -and -not $global:ActiveTab.LoadingJob) {
+                Hide-LoadingOverlay
             }
         }
+
+        if (-not $global:TabsList) { return }
+        foreach ($t in @($global:TabsList)) {
+            if ($t.LoadingJob) {
+                $job = $t.LoadingJob
+                $isTimedOut = ($job.StartTime -and ([DateTime]::UtcNow - $job.StartTime).TotalSeconds -gt 3.5)
+
+                if ($job.AsyncResult.IsCompleted -or $isTimedOut) {
+                    $t.LoadingJob = $null
+                    $turns = @()
+                    try {
+                        if ($job.AsyncResult.IsCompleted) {
+                            $rawTurns = $job.PowerShell.EndInvoke($job.AsyncResult)
+                            if ($rawTurns) { $turns = $rawTurns }
+                        }
+                    } catch {}
+                    finally {
+                        try { $job.PowerShell.Dispose() } catch {}
+                    }
+
+                    try {
+                        # Populate transcript only if conversation id on tab has not changed
+                        if ($job.ConvId -eq $t.ConversationId) {
+                            Populate-ConversationTranscriptToLog -Turns $turns -conversationId $job.ConvId -Document $t.Document -Tab $t
+
+                            $t.StatusText = [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d, \u0433\u043e\u0442\u043e\u0432 \u043a \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u044e")
+                            $t.StatusColor = "#4CAF50"
+                            if ($t.HeaderDot) {
+                                $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50")
+                            }
+                        }
+                    } catch {}
+
+                    if ($t -eq $global:ActiveTab) {
+                        Hide-LoadingOverlay
+                        $txtStatus.Text = $t.StatusText
+                        $statusDot.Fill = (Get-CachedBrush $t.StatusColor)
+                        Scroll-ChatLogToEnd
+                        Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
+                    }
+                }
+        }
+        }
+    } catch {
+        Hide-LoadingOverlay
     }
 }
 
@@ -5661,7 +5719,11 @@ function Select-ConversationItem {
     }
     }
 
-    # Запуск плавной неблокирующей асинхронной загрузки с красивой анимацией
+    # Clear active chat log immediately to avoid displaying stale conversation while loading
+    if ($targetTab -eq $global:ActiveTab) {
+        Clear-ChatLog -Document $targetTab.Document
+    }
+    # Launch smooth non-blocking async transcript load
     Start-AsyncTranscriptLoad -conversationId $conv.Id -Tab $targetTab
     $targetTab.IsTranscriptLoaded = $true
     Update-ContextDisplay -conversationId $conv.Id
@@ -5676,7 +5738,6 @@ function Reset-ToNewChat {
             $oldJob = $tab.LoadingJob
             $tab.LoadingJob = $null
             try {
-                $oldJob.PowerShell.Stop()
                 $oldJob.PowerShell.Dispose()
             } catch {}
         }
@@ -6831,7 +6892,6 @@ function global:Close-Tab {
         $oldJob = $Tab.LoadingJob
         $Tab.LoadingJob = $null
         try {
-            $oldJob.PowerShell.Stop()
             $oldJob.PowerShell.Dispose()
         } catch {}
     }
@@ -7983,7 +8043,6 @@ $window.Add_Closing({
             }
             if ($t.LoadingJob) {
                 try {
-                    $t.LoadingJob.PowerShell.Stop()
                     $t.LoadingJob.PowerShell.Dispose()
                 } catch {}
             }
