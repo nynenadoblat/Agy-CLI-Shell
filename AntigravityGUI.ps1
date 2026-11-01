@@ -5701,7 +5701,7 @@ function Reset-ToNewChat {
 
     $global:SuppressConvComboEvent = $true
     try {
-        $cmbConversations.SelectedIndex = 0
+        try { $cmbConversations.SelectedIndex = 0 } catch {}
     } finally {
         $global:SuppressConvComboEvent = $false
     }
@@ -7315,25 +7315,35 @@ $cmbConversations.Add_SelectionChanged({
     $sel = $cmbConversations.SelectedItem
     if (-not $sel) { return }
 
-    # Сброс раскрытия комбобокса для немедленного освобождения мыши
+    $targetId = $sel.Tag
+    $currentId = if ($global:ActiveTab) { $global:ActiveTab.ConversationId } else { $global:CurrentConversationId }
+
+    # Р•СЃР»Рё СѓР¶Рµ РІС‹Р±СЂР°РЅ РґР°РЅРЅС‹Р№ РґРёР°Р»РѕРі вЂ” РЅРёС‡РµРіРѕ РЅРµ РґРµР»Р°РµРј
+    if ($targetId -and $targetId -eq $currentId) { return }
+    if (-not $targetId -and -not $currentId) { return }
+
+    # РЎР±СЂРѕСЃ СЂР°СЃРєСЂС‹С‚РёСЏ РєРѕРјР±РѕР±РѕРєСЃР° РґР»СЏ РЅРµРјРµРґР»РµРЅРЅРѕРіРѕ РѕСЃРІРѕР±РѕР¶РґРµРЅРёСЏ РјС‹С€Рё
     if ($cmbConversations.IsDropDownOpen) {
         $cmbConversations.IsDropDownOpen = $false
     }
 
-    if (-not $sel.Tag) {
-        $window.Dispatcher.BeginInvoke([Action]{
+    if (-not $targetId) {
+        $sbReset = {
             Reset-ToNewChat
-        }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
+        }.GetNewClosure()
+        $window.Dispatcher.BeginInvoke([Action]$sbReset, [System.Windows.Threading.DispatcherPriority]::Normal) | Out-Null
     } else {
         $convObj = $sel.ConvObj
         if (-not $convObj) {
-            $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $sel.Tag } | Select-Object -First 1
+            $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $targetId } | Select-Object -First 1
         }
         if ($convObj) {
-            $window.Dispatcher.BeginInvoke([Action]{
-                Select-ConversationItem $convObj
+            $sbSelect = {
+                param($c)
+                Select-ConversationItem $c
                 Scroll-ChatLogToEnd
-            }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
+            }.GetNewClosure()
+            $window.Dispatcher.BeginInvoke([Action[object]]$sbSelect, [System.Windows.Threading.DispatcherPriority]::Normal, $convObj) | Out-Null
         }
     }
 })
