@@ -436,14 +436,29 @@ if (-not (Test-Path $defaultWorkspace)) {
                             FontSize="13"
                             IsDefault="True"/>
 
-                    <Button x:Name="BtnAttachImage"
-                            Grid.Row="2"
-                            Content="📎 Картинка"
-                            Background="#23272E"
-                            BorderBrush="#3E4451"
-                            Padding="6,3"
-                            FontSize="11"
-                            ToolTip="Прикрепить изображение из файла (или нажмите Ctrl+V для вставки скриншота)"/>
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="4"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="BtnAttachImage"
+                                Grid.Column="0"
+                                Content="📎 Файл"
+                                Background="#23272E"
+                                BorderBrush="#3E4451"
+                                Padding="2,3"
+                                FontSize="11"
+                                ToolTip="Прикрепить файл или изображение (Ctrl+V)"/>
+                        <Button x:Name="BtnAttachFolder"
+                                Grid.Column="2"
+                                Content="📁 Папка"
+                                Background="#23272E"
+                                BorderBrush="#3E4451"
+                                Padding="2,3"
+                                FontSize="11"
+                                ToolTip="Прикрепить папку проекта"/>
+                    </Grid>
 
                     <Button x:Name="BtnStop"
                             Grid.Row="4"
@@ -605,6 +620,7 @@ $borderAttachments      = $window.FindName("BorderAttachments")
 $pnlAttachmentsList     = $window.FindName("PnlAttachmentsList")
 $btnClearAttachments    = $window.FindName("BtnClearAttachments")
 $btnAttachImage         = $window.FindName("BtnAttachImage")
+$btnAttachFolder        = $window.FindName("BtnAttachFolder")
 $loadingOverlay         = $window.FindName("LoadingOverlay")
 $spinnerRotate          = $window.FindName("SpinnerRotate")
 $txtLoadingTitle        = $window.FindName("TxtLoadingTitle")
@@ -657,7 +673,7 @@ function Render-AttachmentsUI {
     foreach ($item in $global:AttachedImages) {
         $capturedItem = $item
 
-        # Карточка изображения
+        # Карточка вложения
         $card = [System.Windows.Controls.Border]::new()
         $card.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#252A30")
         $card.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#383E4A")
@@ -669,7 +685,20 @@ function Render-AttachmentsUI {
         $cardGrid = [System.Windows.Controls.StackPanel]::new()
         $cardGrid.Orientation = [System.Windows.Controls.Orientation]::Horizontal
 
-        # Миниатюра
+        # Кликабельная область для открытия (миниатюра/иконка + текстовое описание)
+        $clickablePart = [System.Windows.Controls.StackPanel]::new()
+        $clickablePart.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+        $clickablePart.Cursor = [System.Windows.Input.Cursors]::Hand
+
+        $itemPath = $item.FilePath
+        $itemType = if ($item.ItemType) { $item.ItemType } elseif ($item.ImageSource) { "Image" } else { "File" }
+        $clickablePart.ToolTip = switch ($itemType) {
+            "Folder" { "Папка (клик откроет в Проводнике)`n$itemPath" }
+            "File"   { "Файл (клик откроет файл)`n$itemPath" }
+            default  { "Нажмите для просмотра изображения`n$itemPath" }
+        }
+
+        # Миниатюра (для картинок) или бейдж с иконкой (для файлов и папок)
         if ($item.ImageSource) {
             $imgCtrl = [System.Windows.Controls.Image]::new()
             $imgCtrl.Source = $item.ImageSource
@@ -677,12 +706,31 @@ function Render-AttachmentsUI {
             $imgCtrl.Height = 36
             $imgCtrl.Stretch = [System.Windows.Media.Stretch]::UniformToFill
             $imgCtrl.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
-            
+
             $imgBorder = [System.Windows.Controls.Border]::new()
             $imgBorder.CornerRadius = [System.Windows.CornerRadius]::new(3)
             $imgBorder.ClipToBounds = $true
             $imgBorder.Child = $imgCtrl
-            [void]$cardGrid.Children.Add($imgBorder)
+            [void]$clickablePart.Children.Add($imgBorder)
+        } else {
+            $iconBorder = [System.Windows.Controls.Border]::new()
+            $iconBorder.Width = 36
+            $iconBorder.Height = 36
+            $iconBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $iconBorder.Background = if ($itemType -eq "Folder") {
+                [System.Windows.Media.BrushConverter]::new().ConvertFromString("#382A15")
+            } else {
+                [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1C2D42")
+            }
+            $iconBorder.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
+
+            $iconTxt = [System.Windows.Controls.TextBlock]::new()
+            $iconTxt.Text = if ($item.Icon) { $item.Icon } elseif ($itemType -eq "Folder") { "📁" } else { "📄" }
+            $iconTxt.FontSize = 17
+            $iconTxt.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+            $iconTxt.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+            $iconBorder.Child = $iconTxt
+            [void]$clickablePart.Children.Add($iconBorder)
         }
 
         # Текстовое описание
@@ -704,7 +752,49 @@ function Render-AttachmentsUI {
             [void]$txtBox.Children.Add($lblSub)
         }
 
-        [void]$cardGrid.Children.Add($txtBox)
+        if ($item.HasAnnotation -and $item.AnnotatedFilePath -and (Test-Path -LiteralPath $item.AnnotatedFilePath)) {
+            $lblAnnotBadge = [System.Windows.Controls.TextBlock]::new()
+            $lblAnnotBadge.Text = "🎯 С разметкой (2 файла)"
+            $lblAnnotBadge.FontSize = 10
+            $lblAnnotBadge.FontWeight = [System.Windows.FontWeights]::SemiBold
+            $lblAnnotBadge.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#3FB950")
+            [void]$txtBox.Children.Add($lblAnnotBadge)
+        }
+        [void]$clickablePart.Children.Add($txtBox)
+
+        # Интерактивная подсветка рамки при наведении мыши
+        $cardRef = $card
+        $clickablePart.Add_MouseEnter({
+            $cardRef.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#58A6FF")
+            $cardRef.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
+        }.GetNewClosure())
+        $clickablePart.Add_MouseLeave({
+            $cardRef.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#383E4A")
+            $cardRef.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#252A30")
+        }.GetNewClosure())
+
+        # Клик по карточке: просмотрщик для картинок, проводник для папок, запуск для файлов
+        $previewPath = $item.FilePath
+        $previewTitle = $item.DisplayName
+        $clickablePart.Add_PreviewMouseLeftButtonDown({
+            param($s, $e)
+            $e.Handled = $true
+            if ($capturedItem.ItemType -eq "Image" -or $capturedItem.ImageSource) {
+                Show-ImageViewerWindow -FilePath $previewPath -Title $previewTitle -AttachedItem $capturedItem
+            } elseif ($capturedItem.ItemType -eq "Folder" -or (Test-Path -LiteralPath $previewPath -PathType Container)) {
+                try { Start-Process "explorer.exe" -ArgumentList "`"$previewPath`"" } catch {}
+            } else {
+                try {
+                    $psi = [System.Diagnostics.ProcessStartInfo]::new($previewPath)
+                    $psi.UseShellExecute = $true
+                    [System.Diagnostics.Process]::Start($psi) | Out-Null
+                } catch {
+                    try { Start-Process "explorer.exe" -ArgumentList "/select,`"$previewPath`"" } catch {}
+                }
+            }
+        }.GetNewClosure())
+
+        [void]$cardGrid.Children.Add($clickablePart)
 
         # Кнопка удаления (✖)
         $btnRemove = [System.Windows.Controls.Button]::new()
@@ -717,7 +807,11 @@ function Render-AttachmentsUI {
         $btnRemove.Cursor = [System.Windows.Input.Cursors]::Hand
         $btnRemove.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
         $btnRemove.Padding = [System.Windows.Thickness]::new(4, 2, 4, 2)
-        $btnRemove.ToolTip = "Удалить это изображение"
+        $btnRemove.ToolTip = switch ($itemType) {
+            "Folder" { "Удалить эту папку из вложений" }
+            "File"   { "Удалить этот файл из вложений" }
+            default  { "Удалить это изображение" }
+        }
         $targetItem = $item
         $btnRemove.Add_Click({
             if ($targetItem) {
@@ -757,14 +851,18 @@ function Add-ClipboardImage {
 
         $w = [math]::Round($bs.Width)
         $h = [math]::Round($bs.Height)
-        $fileSize = [math]::Round((Get-Item $filePath).Length / 1024)
+        $fileSize = [math]::Round((Get-Item -LiteralPath $filePath).Length / 1024)
 
         $item = [pscustomobject]@{
-            FilePath    = $filePath
-            FileName    = $filename
-            DisplayName = "Скриншот (${w}x${h})"
-            DimInfo     = "${w}x${h} • ${fileSize} KB"
-            ImageSource = $bs
+            ItemType          = "Image"
+            FilePath          = $filePath
+            FileName          = $filename
+            DisplayName       = "Скриншот (${w}x${h})"
+            DimInfo           = "${w}x${h} • ${fileSize} KB"
+            ImageSource       = $bs
+            Icon              = "🖼️"
+            AnnotatedFilePath = $null
+            HasAnnotation     = $false
         }
         $global:AttachedImages.Add($item)
         Render-AttachmentsUI
@@ -773,35 +871,108 @@ function Add-ClipboardImage {
     }
 }
 
-function Add-AttachedImageFile {
-    param([string]$path)
-    if (-not (Test-Path $path)) { return }
+function Add-AttachedItem {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
     try {
-        $ext = [System.IO.Path]::GetExtension($path).ToLower()
-        if ($ext -notin @(".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")) { return }
+        $fullPath = (Convert-Path -LiteralPath $Path)
+        $isContainer = (Test-Path -LiteralPath $fullPath -PathType Container)
 
-        $bi = [System.Windows.Media.Imaging.BitmapImage]::new()
-        $bi.BeginInit()
-        $bi.UriSource = [System.Uri]::new($path)
-        $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-        $bi.EndInit()
-        $bi.Freeze()
+        # Проверяем, не добавлен ли уже этот путь
+        $existing = $global:AttachedImages | Where-Object { $_.FilePath -eq $fullPath } | Select-Object -First 1
+        if ($existing) { return }
 
-        $fn = [System.IO.Path]::GetFileName($path)
-        $fileSize = [math]::Round((Get-Item $path).Length / 1024)
-        $w = [math]::Round($bi.PixelWidth)
-        $h = [math]::Round($bi.PixelHeight)
+        if ($isContainer) {
+            $dirInfo = Get-Item -LiteralPath $fullPath
+            $fn = $dirInfo.Name
+            $fileCount = 0
+            try {
+                $fileCount = [System.IO.Directory]::GetFiles($fullPath, "*", [System.IO.SearchOption]::AllDirectories).Length
+            } catch {
+                try { $fileCount = [System.IO.Directory]::GetFiles($fullPath).Length } catch {}
+            }
+            $dimInfo = if ($fileCount -gt 0) { "Папка • $fileCount файлов" } else { "Папка" }
+
+            $item = [pscustomobject]@{
+                ItemType          = "Folder"
+                FilePath          = $fullPath
+                FileName          = $fn
+                DisplayName       = $fn
+                DimInfo           = $dimInfo
+                ImageSource       = $null
+                Icon              = "📁"
+                AnnotatedFilePath = $null
+                HasAnnotation     = $false
+            }
+            $global:AttachedImages.Add($item)
+            Render-AttachmentsUI
+            return
+        }
+
+        $ext = [System.IO.Path]::GetExtension($fullPath).ToLower()
+        $isImg = ($ext -in @(".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
+
+        if ($isImg) {
+            $bi = [System.Windows.Media.Imaging.BitmapImage]::new()
+            $bi.BeginInit()
+            $bi.UriSource = [System.Uri]::new($fullPath)
+            $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+            $bi.EndInit()
+            $bi.Freeze()
+
+            $fn = [System.IO.Path]::GetFileName($fullPath)
+            $fileSize = [math]::Round((Get-Item -LiteralPath $fullPath).Length / 1024)
+            $w = [math]::Round($bi.PixelWidth)
+            $h = [math]::Round($bi.PixelHeight)
+
+            $item = [pscustomobject]@{
+                ItemType          = "Image"
+                FilePath          = $fullPath
+                FileName          = $fn
+                DisplayName       = $fn
+                DimInfo           = "${w}x${h} • ${fileSize} KB"
+                ImageSource       = $bi
+                Icon              = "🖼️"
+                AnnotatedFilePath = $null
+                HasAnnotation     = $false
+            }
+            $global:AttachedImages.Add($item)
+            Render-AttachmentsUI
+            return
+        }
+
+        # Обычный файл любого расширения
+        $fn = [System.IO.Path]::GetFileName($fullPath)
+        $len = (Get-Item -LiteralPath $fullPath).Length
+        $fileSizeStr = if ($len -gt 1048576) { "$([math]::Round($len / 1048576, 1)) MB" } else { "$([math]::Round($len / 1024)) KB" }
+
+        $icon = switch -regex ($ext) {
+            '\.(zip|rar|7z|tar|gz|bz2)$' { "📦" }
+            '\.(txt|md|log|rtf|pdf|docx?|xlsx?)$' { "📝" }
+            '\.(cs|py|js|ts|json|xml|yaml|yml|html|css|cpp|h|c|rs|go|sh|ps1)$' { "📄" }
+            '\.(mp3|wav|ogg|flac|mp4|mkv|avi|mov)$' { "🎬" }
+            default { "📄" }
+        }
 
         $item = [pscustomobject]@{
-            FilePath    = (Convert-Path $path)
-            FileName    = $fn
-            DisplayName = $fn
-            DimInfo     = "${w}x${h} • ${fileSize} KB"
-            ImageSource = $bi
+            ItemType          = "File"
+            FilePath          = $fullPath
+            FileName          = $fn
+            DisplayName       = $fn
+            DimInfo           = "$ext • $fileSizeStr"
+            ImageSource       = $null
+            Icon              = $icon
+            AnnotatedFilePath = $null
+            HasAnnotation     = $false
         }
         $global:AttachedImages.Add($item)
         Render-AttachmentsUI
     } catch {}
+}
+
+function Add-AttachedImageFile {
+    param([string]$path)
+    Add-AttachedItem -Path $path
 }
 
 function Handle-PasteAction {
@@ -811,15 +982,14 @@ function Handle-PasteAction {
     }
     if ([System.Windows.Clipboard]::ContainsFileDropList()) {
         $files = [System.Windows.Clipboard]::GetFileDropList()
-        $hasImg = $false
+        $hasAny = $false
         foreach ($f in $files) {
-            $ext = [System.IO.Path]::GetExtension($f).ToLower()
-            if ($ext -in @(".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")) {
-                Add-AttachedImageFile $f
-                $hasImg = $true
+            if (Test-Path -LiteralPath $f) {
+                Add-AttachedItem -Path $f
+                $hasAny = $true
             }
         }
-        if ($hasImg) { return $true }
+        if ($hasAny) { return $true }
     }
     return $false
 }
@@ -1606,7 +1776,9 @@ function Append-UserMessageToLog {
         [string]$TimeStr = "",
         [Parameter(Mandatory=$true)][string]$Text,
         [string]$Badges = "",
-        $Document = $null
+        $Attachments = $null,
+        $Document = $null,
+        [switch]$IsQueued
     )
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if (-not $doc) { return }
@@ -1629,6 +1801,13 @@ function Append-UserMessageToLog {
     $headerRun.Foreground = Get-CachedBrush "#4FC1FF"
     $headerRun.FontWeight = [System.Windows.FontWeights]::Bold
     $p.Inlines.Add($headerRun)
+
+    if ($IsQueued) {
+        $qRun = [System.Windows.Documents.Run]::new("⏳ [В очереди] ")
+        $qRun.Foreground = Get-CachedBrush "#F0883E"
+        $qRun.FontWeight = [System.Windows.FontWeights]::Bold
+        $p.Inlines.Add($qRun)
+    }
 
     # 2. Бейджи прикрепленных файлов (если есть)
     if (-not [string]::IsNullOrEmpty($Badges)) {
@@ -3084,27 +3263,15 @@ function Sync-QuotaLiveFromAgy {
     }
 
     # 3. Синхронный живой запрос через agy.exe
-    try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "agy.exe"
-        $psi.Arguments = "-p `"/usage`" --output-format json"
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        if (-not $proc.WaitForExit(9000)) {
-            try { $proc.Kill() } catch {}
-            return $global:LiveQuotaCache
-        }
-        $out = $proc.StandardOutput.ReadToEnd()
-        $parsed = Update-QuotaCacheFromJson -RawJson $out
-        if ($parsed) { return $parsed }
-        return $global:LiveQuotaCache
-    } catch {
-        return $global:LiveQuotaCache
+    # Non-blocking async live quota sync
+    if (-not $global:ActiveQuotaSyncJob) {
+        try {
+            Start-QuotaLiveSyncAsync -OnCompleted {
+                Update-LimitsDisplay
+            } | Out-Null
+        } catch {}
     }
+    return $global:LiveQuotaCache
 }
 function Load-QuotaCache {
     if (Test-Path $script:QuotaCacheFilePath) {
@@ -4174,7 +4341,40 @@ function Populate-ConversationTranscriptToLog {
             if ($turn.Items -and $turn.Items.Count -gt 0) {
                 $agentHeaderAdded = $false
 
-                foreach ($item in $turn.Items) {
+                # Consolidate consecutive tools and system messages
+                $consolidated = [System.Collections.Generic.List[psobject]]::new()
+                $pendingTools = [System.Collections.Generic.List[psobject]]::new()
+                $pendingSys = [System.Collections.Generic.List[psobject]]::new()
+
+                $flushAll = {
+                    if ($pendingTools.Count -gt 0) {
+                        $consolidated.Add([pscustomobject]@{ Type = "TOOLS"; Tools = $pendingTools.ToArray() })
+                        $pendingTools.Clear()
+                    }
+                    if ($pendingSys.Count -gt 0) {
+                        if ($pendingSys.Count -eq 1) {
+                            $consolidated.Add($pendingSys[0])
+                        } else {
+                            $summary = "System Notifications ($($pendingSys.Count))"
+                            $body = ($pendingSys | ForEach-Object { "- $($_.Summary)" }) -join "`r`n"
+                            $consolidated.Add([pscustomobject]@{ Type = "SYSTEM_MESSAGE"; Summary = $summary; Body = $body })
+                        }
+                        $pendingSys.Clear()
+                    }
+                }
+
+                foreach ($rawIt in $turn.Items) {
+                    if ($rawIt.Type -eq "TOOLS") {
+                        if ($rawIt.Tools) { foreach ($tObj in $rawIt.Tools) { $pendingTools.Add($tObj) } }
+                    } elseif ($rawIt.Type -eq "SYSTEM_MESSAGE") {
+                        $pendingSys.Add($rawIt)
+                    } elseif ($rawIt.Type -eq "AGENT_TEXT") {
+                        & $flushAll
+                        $consolidated.Add($rawIt)
+                    }
+                }
+                & $flushAll
+                foreach ($item in $consolidated) {
                     if ($item.Type -eq "TOOLS") {
                         if (-not $agentHeaderAdded) {
                             Append-AgentHeader -Document $doc
@@ -4298,7 +4498,6 @@ function Update-TabLoadingJobs {
                     $statusDot.Fill = (Get-CachedBrush "#4CAF50")
                     Scroll-ChatLogToEnd
                     Update-ContextDisplay -conversationId $job.ConvId -modelName $t.Model
-                    Update-LimitsDisplay -modelName $t.Model
                 }
             }
         }
@@ -4374,11 +4573,15 @@ function Select-ConversationItem {
 
     $global:SuppressConvComboEvent = $true
     try {
-        for ($i = 0; $i -lt $cmbConversations.Items.Count; $i++) {
-            $item = $cmbConversations.Items[$i]
-            if ($item.Tag -eq $conv.Id) {
-                $cmbConversations.SelectedIndex = $i
-                break
+        if ($cmbConversations) {
+            for ($i = 0; $i -lt $cmbConversations.Items.Count; $i++) {
+                $item = $cmbConversations.Items[$i]
+                if ($item.Tag -eq $conv.Id) {
+                    if ($cmbConversations.SelectedIndex -ne $i) {
+                        try { $cmbConversations.SelectedIndex = $i } catch {}
+                    }
+                    break
+                }
             }
         }
     } finally {
@@ -5055,6 +5258,7 @@ function New-TabSession {
         IsRunning     = $false
         StopRequested = $false
         ProcessId     = 0
+        Stopwatch     = $null
     })
 
     $isLoaded = (-not $Lazy -or [string]::IsNullOrEmpty($ConversationId))
@@ -5071,6 +5275,7 @@ function New-TabSession {
         Document            = $doc
         PromptText          = ""
         AttachedImages      = [System.Collections.Generic.List[psobject]]::new()
+        QueuedUserMessages  = [System.Collections.Generic.List[psobject]]::new()
         ActiveToolGroup     = $null
         SyncState           = $tabSync
         StatusText          = if ($isLoaded) { "Готов к работе" } else { "Диалог сохранен (нажмите для загрузки)" }
@@ -5513,9 +5718,13 @@ function Switch-ToTab {
                 }
             }
             if ($foundIdx -ge 0) {
-                $cmbConversations.SelectedIndex = $foundIdx
+                if ($cmbConversations.SelectedIndex -ne $foundIdx) {
+                    try { $cmbConversations.SelectedIndex = $foundIdx } catch {}
+                }
             } else {
-                $cmbConversations.SelectedIndex = 0
+                if ($cmbConversations.SelectedIndex -ne 0) {
+                    try { $cmbConversations.SelectedIndex = 0 } catch {}
+                }
             }
         } finally {
             $global:SuppressConvComboEvent = $false
@@ -5565,6 +5774,9 @@ function global:Close-Tab {
             $Tab.SyncState.StopRequested = $true
             Stop-ProcessTree -processId $pidToKill
         } catch {}
+    }
+    if ($Tab.QueuedUserMessages) {
+        $Tab.QueuedUserMessages.Clear()
     }
 
     $idx = $global:TabsList.IndexOf($Tab)
@@ -5695,6 +5907,23 @@ $uiTimer.Interval = [TimeSpan]::FromMilliseconds(40)
 
 $uiTimer.Add_Tick({
     Update-TabLoadingJobs
+
+    # Живой счетчик времени работы для всех запущенных вкладок
+    foreach ($tabItem in @($global:TabsList)) {
+        if ($tabItem.SyncState -and $tabItem.SyncState.IsRunning -and $tabItem.SyncState.Stopwatch) {
+            $sw = $tabItem.SyncState.Stopwatch
+            $totalSec = [math]::Floor($sw.Elapsed.TotalSeconds)
+            $m = [int]($totalSec / 60)
+            $s = [int]($totalSec % 60)
+            $ds = [math]::Floor($sw.Elapsed.Milliseconds / 100)
+            $timeStr = '{0:D2}:{1:D2}.{2}' -f $m, $s, $ds
+            $tabItem.StatusText = "⏳ Агент выполняет задачи... ($timeStr)"
+        }
+    }
+    if ($global:ActiveTab -and $global:ActiveTab.SyncState -and $global:ActiveTab.SyncState.IsRunning) {
+        $txtStatus.Text = $global:ActiveTab.StatusText
+    }
+
     foreach ($t in @($global:TabsList)) {
         $item = $null
         while ($t.SyncState.Queue.TryDequeue([ref]$item)) {
@@ -5766,8 +5995,24 @@ $uiTimer.Add_Tick({
                 "done" {
                     Finalize-ActiveToolGroup -Tab $t
                     Finalize-TabStreamingBuffer -Tab $t
+                    $elapsedTotal = if ($t.SyncState.Stopwatch) {
+                        $t.SyncState.Stopwatch.Stop()
+                        $t.SyncState.Stopwatch.Elapsed
+                    } else { $null }
                     $t.SyncState.IsRunning = $false
-                    $t.StatusText = "Готов к работе"
+                    $doneSec = if ($null -ne $elapsedTotal) { [math]::Round($elapsedTotal.TotalSeconds, 1) } else { $null }
+                    $doneText = if ($null -ne $doneSec) {
+                        if ($doneSec -ge 60) {
+                            $m = [int]($doneSec / 60)
+                            $s = [math]::Round($doneSec % 60, 1)
+                            "Готов к работе (выполнено за ${m}м ${s}с)"
+                        } else {
+                            "Готов к работе (выполнено за ${doneSec} с)"
+                        }
+                    } else {
+                        "Готов к работе"
+                    }
+                    $t.StatusText = $doneText
                     $t.StatusColor = "#4CAF50"
                     if ($t.HeaderDot) {
                         $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50")
@@ -5777,25 +6022,63 @@ $uiTimer.Add_Tick({
                         Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
                         Update-LimitsDisplay -modelName $t.Model
                     }
-                    if ($t -eq $global:ActiveTab) {
-                        $btnSend.IsEnabled = $true
-                        $btnStop.IsEnabled = $false
-                        $txtPromptInput.IsEnabled = $true
-                        $statusDot.Fill = (Get-CachedBrush "#4CAF50")
-                        $txtStatus.Text = "Готов к работе"
-                        Scroll-ChatLogToEnd
-                        $txtPromptInput.Focus() | Out-Null
+                    # Автоматическая доставка следующего сообщения из очереди
+                    if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
+                        $nextMsg = $t.QueuedUserMessages[0]
+                        $t.QueuedUserMessages.RemoveAt(0)
+
+                        Append-AgentHeader -Document $t.Document
+                        $nextConvId = $t.ConversationId
+                        $nextWs = if ($nextMsg.Workspace) { $nextMsg.Workspace } else { $t.Workspace }
+                        $nextModel = if ($nextMsg.Model) { $nextMsg.Model } else { $t.Model }
+                        $nextMode = if ($nextMsg.Mode) { $nextMsg.Mode } else { $t.Mode }
+                        $nextEffort = if ($nextMsg.Effort) { $nextMsg.Effort } else { $t.Effort }
+                        $nextSkip = if ($null -ne $nextMsg.SkipPerms) { $nextMsg.SkipPerms } else { $t.SkipPerms }
+
+                        if ($t -eq $global:ActiveTab) {
+                            $btnSend.IsEnabled = $true
+                            $btnSend.Content = "В очередь ↵"
+                            $btnSend.Background = (Get-CachedBrush "#B07010")
+                            $btnSend.ToolTip = "Добавить сообщение в очередь (Enter или Alt+M)"
+                            $btnStop.IsEnabled = $true
+                            $txtPromptInput.IsEnabled = $true
+                            $statusDot.Fill = (Get-CachedBrush "#FFA500")
+                            $qCount = $t.QueuedUserMessages.Count
+                            $txtStatus.Text = if ($qCount -gt 0) { "Агент думает и выполняет задачи... (в очереди: $qCount)" } else { "Агент думает и выполняет задачи..." }
+                            Scroll-ChatLogToEnd
+                        }
+
+                        Start-AgentExecutionJob -Tab $t -Prompt $nextMsg.FullAgentPrompt -Workspace $nextWs -Model $nextModel -Mode $nextMode -Effort $nextEffort -SkipPerms $nextSkip -ConversationId $nextConvId
+                    } else {
+                        if ($t -eq $global:ActiveTab) {
+                            $btnSend.IsEnabled = $true
+                            $btnSend.Content = "Отправить ↵"
+                            $btnSend.Background = (Get-CachedBrush "#0E639C")
+                            $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
+                            $btnStop.IsEnabled = $false
+                            $txtPromptInput.IsEnabled = $true
+                            $statusDot.Fill = (Get-CachedBrush "#4CAF50")
+                            $txtStatus.Text = $doneText
+                            Scroll-ChatLogToEnd
+                            $txtPromptInput.Focus() | Out-Null
+                        }
                     }
                 }
                 "error" {
                     Finalize-ActiveToolGroup -Tab $t
                     Finalize-TabStreamingBuffer -Tab $t
+                    if ($t.SyncState.Stopwatch) {
+                        $t.SyncState.Stopwatch.Stop()
+                    }
                     $t.SyncState.IsRunning = $false
 
                     # Детектируем ошибки квот/rate-limit от API (429, RESOURCE_EXHAUSTED, weekly limit)
                     $errMsg = $item.Message
                     $isQuotaError = ($errMsg -match '429|RESOURCE_EXHAUSTED|quota|rate.?limit|Rate limit|weekly.?limit|Daily limit|RateLimitError|Quota exceeded|too many requests')
-                    if ($isQuotaError) {
+                                        if ($isQuotaError) {
+                        if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
+                            $t.QueuedUserMessages.Clear()
+                        }
                         $nowForBlock = [DateTime]::Now
                         $tGrp = Get-ModelQuotaGroup -modelName $t.Model
                         $blockUntil = $nowForBlock.AddDays(7)
@@ -5826,9 +6109,11 @@ $uiTimer.Add_Tick({
                         if ($t.HeaderDot) {
                             $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
                         }
-                        Append-ChatFormatted -Text "`r`n⛔ [ЛИМИТ ИСЧЕРПАН]: Квота API превышена ($tGrp). Отправка заблокирована (сброс через $resetsInStr, $($blockUntil.ToString('dd.MM HH:mm'))).$([Environment]::NewLine)$errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
+                        Append-ChatFormatted -Text "`r`n⛔ [ЛИМИТ ИСЧЕРПАН]: Квота API превышена ($tGrp). Отправка заблокирована (сброс через $resetsInStr, ($($blockUntil.ToString('dd.MM HH:mm')))).$([Environment]::NewLine)$errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
                         if ($t -eq $global:ActiveTab) {
                             $btnSend.IsEnabled = $false
+                            $btnSend.Content = "Отправить ↵"
+                            $btnSend.Background = (Get-CachedBrush "#0E639C")
                             $btnStop.IsEnabled = $false
                             $txtPromptInput.IsEnabled = $false
                             $statusDot.Fill = (Get-CachedBrush "#F85149")
@@ -5836,6 +6121,11 @@ $uiTimer.Add_Tick({
                             Scroll-ChatLogToEnd
                         }
                     } else {
+                        if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
+                            $qCount = $t.QueuedUserMessages.Count
+                            $t.QueuedUserMessages.Clear()
+                            Append-ChatFormatted -Text "⚠️ Очередь отложенных сообщений ($qCount) была отменена из-за ошибки выполнения.`r`n`r`n" -Color "#FFA500" -Document $t.Document
+                        }
                         $t.StatusText = "Ошибка выполнения"
                         $t.StatusColor = "#F85149"
                         if ($t.HeaderDot) {
@@ -5844,6 +6134,9 @@ $uiTimer.Add_Tick({
                         Append-ChatFormatted -Text "`r`n❌ [ОШИБКА]: $errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
                         if ($t -eq $global:ActiveTab) {
                             $btnSend.IsEnabled = $true
+                            $btnSend.Content = "Отправить ↵"
+                            $btnSend.Background = (Get-CachedBrush "#0E639C")
+                            $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
                             $btnStop.IsEnabled = $false
                             $txtPromptInput.IsEnabled = $true
                             $statusDot.Fill = (Get-CachedBrush "#F85149")
@@ -5957,6 +6250,11 @@ $cmbConversations.Add_SelectionChanged({
     $sel = $cmbConversations.SelectedItem
     if (-not $sel) { return }
 
+    # Close dropdown immediately to release mouse capture
+    if ($cmbConversations.IsDropDownOpen) {
+        $cmbConversations.IsDropDownOpen = $false
+    }
+
     if (-not $sel.Tag) {
         Reset-ToNewChat
     } else {
@@ -5991,6 +6289,9 @@ $btnStop.Add_Click({
     if ($tab -and $tab.SyncState.IsRunning) {
         try {
             $tab.SyncState.StopRequested = $true
+            if ($tab.SyncState.Stopwatch) {
+                $tab.SyncState.Stopwatch.Stop()
+            }
             if ($tab.SyncState.ProcessId -gt 0) {
                 $pidToKill = $tab.SyncState.ProcessId
                 Stop-ProcessTree -processId $pidToKill
@@ -6004,18 +6305,239 @@ $btnStop.Add_Click({
     }
 })
 
-# Основная функция отправки запроса
+# Формирование полного текста промпта с путями к файлам, папкам и изображениям
+function Build-FullAgentPrompt {
+    param(
+        [Parameter(Mandatory=$true)][string]$Prompt,
+        $Attachments = $null
+    )
+    if (-not $Attachments -or $Attachments.Count -eq 0) {
+        return $Prompt
+    }
+
+    $attachedList = @($Attachments)
+    $onlyImages = $true
+    foreach ($it in $attachedList) {
+        if ($it.ItemType -ne "Image" -and -not $it.ImageSource) {
+            $onlyImages = $false
+            break
+        }
+    }
+
+    $imgLines = @()
+    if ($onlyImages) {
+        $imgLines += "[Прикрепленные изображения:"
+    } else {
+        $imgLines += "[Прикрепленные файлы, папки и изображения:"
+    }
+
+    foreach ($att in $attachedList) {
+        $uriPath = "file:///" + $att.FilePath.Replace('\', '/')
+        $typeLabel = if ($att.ItemType -eq "Folder") { " (папка)" } elseif ($att.ItemType -eq "File") { " (файл)" } else { "" }
+
+        if ($att.HasAnnotation -and $att.AnnotatedFilePath -and (Test-Path -LiteralPath $att.AnnotatedFilePath)) {
+            $uriAnnot = "file:///" + $att.AnnotatedFilePath.Replace('\', '/')
+            $imgLines += " - $uriPath"
+            $imgLines += " - $uriAnnot"
+        } else {
+            $imgLines += " - ${uriPath}${typeLabel}"
+        }
+    }
+    $imgLines += "]"
+
+    if ($onlyImages) {
+        $imgLines += "Внимание агенту: обязательно изучи прикрепленные изображения по указанным путям с помощью инструмента read_file."
+    } else {
+        $imgLines += "Внимание агенту: обязательно изучи прикрепленные файлы, папки или изображения по указанным путям с помощью соответствующих инструментов (read_file для файлов/изображений, или поиск/терминал для папок)."
+    }
+
+    $hasAnyAnnot = ($attachedList | Where-Object { $_.HasAnnotation -and $_.AnnotatedFilePath -and (Test-Path -LiteralPath $_.AnnotatedFilePath) })
+    if ($hasAnyAnnot) {
+        $imgLines += "Примечание: для файлов с окончанием '_annotated.png' предоставлена графическая разметка маркерами (прямоугольники/стрелки) с указанием ключевых мест интереса. Используйте чистый оригинал для считывания неискаженного текста и перекрытых деталей интерфейса."
+    }
+    return (($imgLines -join "`r`n") + "`r`n`r`n" + $Prompt)
+}
+
+# Запуск фонового процесса выполнения agy в отдельном ранспейсе
+function Start-AgentExecutionJob {
+    param(
+        [Parameter(Mandatory=$true)]$Tab,
+        [Parameter(Mandatory=$true)][string]$Prompt,
+        [Parameter(Mandatory=$true)][string]$Workspace,
+        [Parameter(Mandatory=$true)][string]$Model,
+        [Parameter(Mandatory=$true)][string]$Mode,
+        [Parameter(Mandatory=$true)][string]$Effort,
+        [bool]$SkipPerms = $true,
+        [string]$ConversationId = $null
+    )
+
+    $Tab.StatusText = "Агент думает и выполняет задачи..."
+    $Tab.StatusColor = "#FFA500"
+    if ($Tab.HeaderDot) {
+        $Tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
+    }
+
+    $Tab.SyncState.IsRunning = $true
+    $Tab.SyncState.StopRequested = $false
+    $Tab.SyncState.ProcessId = 0
+    $Tab.SyncState.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:syncState = $Tab.SyncState
+
+    $jobData = [hashtable]::Synchronized(@{
+        AgyPath         = $defaultAgyPath
+        Workspace       = $Workspace
+        Prompt          = $Prompt
+        Model           = $Model
+        Mode            = $Mode
+        Effort          = $Effort
+        SkipPerms       = $SkipPerms
+        ConversationId  = $ConversationId
+        SyncState       = $Tab.SyncState
+    })
+
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $rs.SessionStateProxy.SetVariable("jobData", $jobData)
+
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $ps.AddScript({
+        $st = $jobData.SyncState
+        try {
+            $escapedPrompt = $jobData.Prompt.Replace('\', '\\').Replace('"', '\"')
+
+            $argsList = "-p `"$escapedPrompt`" --output-format stream-json --model $($jobData.Model) --mode $($jobData.Mode)"
+            if ($jobData.Effort -and $jobData.Effort -ne "auto") {
+                $argsList += " --effort $($jobData.Effort)"
+            }
+            if ($jobData.SkipPerms) {
+                $argsList += " --dangerously-skip-permissions"
+            }
+            if ($jobData.ConversationId) {
+                $argsList += " --conversation $($jobData.ConversationId)"
+            }
+
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $jobData.AgyPath
+            $psi.Arguments = $argsList
+            $psi.WorkingDirectory = $jobData.Workspace
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+
+            if ($st.StopRequested) { return }
+            $proc = New-Object System.Diagnostics.Process
+            $proc.StartInfo = $psi
+            $proc.Start() | Out-Null
+
+            $errTask = $proc.StandardError.ReadToEndAsync()
+            $st.ProcessId = $proc.Id
+
+            if ($st.StopRequested) {
+                try { & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null } catch {}
+                return
+            }
+
+            $turnFinished = $false
+
+            while (-not $proc.HasExited) {
+                $line = $proc.StandardOutput.ReadLine()
+                if ($null -eq $line) { break }
+                if ($line) {
+                    try {
+                        $evt = $line | ConvertFrom-Json
+                        switch ($evt.event) {
+                            "init" {
+                                if ($evt.conversation_id) {
+                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.conversation_id })
+                                }
+                            }
+                            "step_update" {
+                                $su = $evt.step_update
+                                if ($su.step_type -eq "agent_response" -and $su.text_delta) {
+                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $su.text_delta })
+                                }
+                                elseif ($su.step_type -eq "tool") {
+                                    if ($su.state -eq "ACTIVE") {
+                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "tool_start"; Name = $su.tool_name })
+                                    } elseif ($su.state -eq "DONE") {
+                                        $dur = [math]::Round([double]$su.duration_seconds, 2)
+                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "tool_done"; Name = $su.tool_name; Duration = $dur })
+                                    }
+                                }
+                            }
+                            "result" {
+                                $turnFinished = $true
+                                if ($evt.result -and $evt.result.conversation_id) {
+                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.result.conversation_id })
+                                }
+                            }
+                        }
+                    } catch {
+                        $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $line })
+                    }
+                }
+            }
+
+            $waitOk = $proc.WaitForExit(1500)
+            if (-not $waitOk -or -not $proc.HasExited) {
+                try {
+                    if ($proc.Id -gt 0) {
+                        & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
+                        if (-not $proc.HasExited) {
+                            $proc.Kill()
+                        }
+                    }
+                } catch {}
+            }
+
+            $errOutput = ""
+            try {
+                if ($errTask) {
+                    $errOutput = $errTask.GetAwaiter().GetResult().Trim()
+                }
+            } catch {}
+
+            if ($st.StopRequested) {
+                # Остановлено пользователем
+            } elseif ($turnFinished) {
+                $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
+            } else {
+                if ($errOutput -and $proc.ExitCode -ne 0) {
+                    $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = $errOutput })
+                } else {
+                    $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
+                }
+            }
+        } catch {
+            $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = $_.ToString() })
+        } finally {
+            $st.IsRunning = $false
+        }
+    }) | Out-Null
+
+    $asyncHandle = $ps.BeginInvoke()
+}
+
+# Основная функция отправки запроса или добавления в очередь
 function Send-AgentPrompt {
     $prompt = $txtPromptInput.Text.Trim()
     $hasAttachments = ($global:AttachedImages.Count -gt 0)
     if ([string]::IsNullOrWhiteSpace($prompt) -and -not $hasAttachments) { return }
     if ([string]::IsNullOrWhiteSpace($prompt) -and $hasAttachments) {
-        $prompt = "Пожалуйста, проанализируй прикрепленное изображение."
+        $hasFoldersOrFiles = ($global:AttachedImages | Where-Object { $_.ItemType -eq "Folder" -or $_.ItemType -eq "File" })
+        if ($hasFoldersOrFiles) {
+            $prompt = "Пожалуйста, изучи прикрепленные файлы/папки."
+        } else {
+            $prompt = "Пожалуйста, проанализируй прикрепленное изображение."
+        }
     }
 
     $tab = $global:ActiveTab
     if (-not $tab) { return }
-    if ($tab.SyncState.IsRunning) { return }
 
     # Проверка: не заблокированы ли квоты ошибкой API (429/RESOURCE_EXHAUSTED)
     $curModel = if ($cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "claude-sonnet-4-6" }
@@ -6080,232 +6602,100 @@ function Send-AgentPrompt {
     }
     Save-LauncherConfig
 
+    # Формирование полного промпта с путями к файлам, папкам и изображениям
+    $attachedCopy = @($global:AttachedImages)
+    $fullAgentPrompt = Build-FullAgentPrompt -Prompt $prompt -Attachments $attachedCopy
+
+    $badgeAttachments = [System.Collections.Generic.List[psobject]]::new()
+    foreach ($att in $attachedCopy) {
+        $badgeAttachments.Add($att)
+        if ($att.HasAnnotation -and $att.AnnotatedFilePath -and (Test-Path -LiteralPath $att.AnnotatedFilePath)) {
+            $annotFn = [System.IO.Path]::GetFileName($att.AnnotatedFilePath)
+            $badgeAttachments.Add([pscustomobject]@{
+                FilePath    = $att.AnnotatedFilePath
+                FileName    = $annotFn
+                DisplayName = "🎯 $annotFn"
+                ItemType    = "Image"
+            })
+        }
+    }
+
+    $badgeNames = ($badgeAttachments | ForEach-Object {
+        if ($_.DisplayName -match "^🎯") {
+            $_.DisplayName
+        } elseif ($_.ItemType -eq "Folder" -or ($_.FilePath -and (Test-Path -LiteralPath $_.FilePath -PathType Container))) {
+            "📁 " + $_.DisplayName
+        } elseif ($_.ItemType -eq "File") {
+            ($_.Icon -or "📄") + " " + $_.DisplayName
+        } else {
+            "🖼️ " + $_.DisplayName
+        }
+    }) -join ", "
+    $imgLogBadges = if ($badgeNames) { "[$badgeNames]" } else { "" }
+
+    # ПРОВЕРКА ОЧЕРЕДИ: Если агент уже выполняет задачу -> ставим в очередь!
+    if ($tab.SyncState.IsRunning) {
+        $qItem = [pscustomobject]@{
+            PromptText       = $prompt
+            FullAgentPrompt  = $fullAgentPrompt
+            Attachments      = $attachedCopy
+            BadgeAttachments = $badgeAttachments
+            Badges           = $imgLogBadges
+            TimeStr          = (Get-Date).ToString("HH:mm:ss")
+            Workspace        = $workspace
+            Model            = $model
+            Mode             = $mode
+            Effort           = $effort
+            SkipPerms        = $skipPerms
+        }
+        if (-not $tab.QueuedUserMessages) {
+            $tab | Add-Member -NotePropertyName "QueuedUserMessages" -NotePropertyValue ([System.Collections.Generic.List[psobject]]::new()) -Force
+        }
+        $tab.QueuedUserMessages.Add($qItem)
+
+        # Выводим сообщение в чат с индикатором очереди
+        $timeNow = $qItem.TimeStr
+        Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Attachments $badgeAttachments -Document $tab.Document -IsQueued
+
+        if ($global:ActiveTab -eq $tab) {
+            $txtPromptInput.Text = ""
+            Clear-AttachedImages
+            Scroll-ChatLogToEnd
+            $qCount = $tab.QueuedUserMessages.Count
+            $txtStatus.Text = "Агент выполняет задачу... (в очереди: $qCount)"
+        }
+        return
+    }
+
     # Инкремент суточных счетчиков лимитов использования
     $global:SessionRequestsDelta++
     Update-LimitsDisplay -modelName $model
 
-    # Формирование полного промпта с путями к изображениям для агента
-    $fullAgentPrompt = $prompt
-    $attachedCopy = @($global:AttachedImages)
-    $imgLogBadges = ""
-
-    if ($hasAttachments) {
-        $imgLines = @()
-        $imgLines += "[Прикрепленные изображения:"
-        foreach ($img in $attachedCopy) {
-            $uriPath = "file:///" + $img.FilePath.Replace('\', '/')
-            $imgLines += " - $uriPath"
-        }
-        $imgLines += "]"
-        $imgLines += "Внимание агенту: обязательно изучи прикрепленные изображения по указанным путям с помощью инструмента read_file."
-        $fullAgentPrompt = ($imgLines -join "`r`n") + "`r`n`r`n" + $prompt
-
-        $badgeNames = ($attachedCopy | ForEach-Object { "🖼️ " + $_.DisplayName }) -join ", "
-        $imgLogBadges = "[$badgeNames]"
-    }
-
     Finalize-ActiveToolGroup -Tab $tab
     Finalize-TabStreamingBuffer -Tab $tab
+
     # Обновление UI перед стартом
     $timeNow = (Get-Date).ToString("HH:mm:ss")
-    Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Document $tab.Document
+    Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Attachments $badgeAttachments -Document $tab.Document
     Append-AgentHeader -Document $tab.Document
 
     if ($global:ActiveTab -eq $tab) {
         Scroll-ChatLogToEnd
         $txtPromptInput.Text = ""
         Clear-AttachedImages
-        $btnSend.IsEnabled = $false
+        $btnSend.IsEnabled = $true
+        $btnSend.Content = "В очередь ↵"
+        $btnSend.Background = (Get-CachedBrush "#B07010")
+        $btnSend.ToolTip = "Добавить сообщение в очередь (Enter или Alt+M)"
         $btnStop.IsEnabled = $true
-        $txtPromptInput.IsEnabled = $false
+        $txtPromptInput.IsEnabled = $true
         $statusDot.Fill = (Get-CachedBrush "#FFA500")
         $txtStatus.Text = "Агент думает и выполняет задачи..."
+        $txtPromptInput.Focus() | Out-Null
     }
 
-    $tab.StatusText = "Агент думает и выполняет задачи..."
-    $tab.StatusColor = "#FFA500"
-    if ($tab.HeaderDot) {
-        $tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
-    }
-
-    # Подготовка параметров для фонового ранспейса
-    $tab.SyncState.IsRunning = $true
-    $tab.SyncState.StopRequested = $false
-    $tab.SyncState.ProcessId = 0
-    $script:syncState = $tab.SyncState
-
-    $jobData = [hashtable]::Synchronized(@{
-        AgyPath         = $defaultAgyPath
-        Workspace       = $workspace
-        Prompt          = $fullAgentPrompt
-        Model           = $model
-        Mode            = $mode
-        Effort          = $effort
-        SkipPerms       = $skipPerms
-        ConversationId  = $convId
-        SyncState       = $tab.SyncState
-    })
-
-    $rs = [runspacefactory]::CreateRunspace()
-    $rs.Open()
-    $rs.SessionStateProxy.SetVariable("jobData", $jobData)
-
-    $ps = [powershell]::Create()
-    $ps.Runspace = $rs
-    $ps.AddScript({
-        $st = $jobData.SyncState
-        try {
-            # Экранирование промпта
-            $escapedPrompt = $jobData.Prompt.Replace('\', '\\').Replace('"', '\"')
-            
-            $argsList = "-p `"$escapedPrompt`" --output-format stream-json --model $($jobData.Model) --mode $($jobData.Mode)"
-            if ($jobData.Effort -and $jobData.Effort -ne "auto") {
-                $argsList += " --effort $($jobData.Effort)"
-            }
-            if ($jobData.SkipPerms) {
-                $argsList += " --dangerously-skip-permissions"
-            }
-            if ($jobData.ConversationId) {
-                $argsList += " --conversation $($jobData.ConversationId)"
-            }
-
-            $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = $jobData.AgyPath
-            $psi.Arguments = $argsList
-            $psi.WorkingDirectory = $jobData.Workspace
-            $psi.RedirectStandardOutput = $true
-            $psi.RedirectStandardError = $true
-            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-            $psi.UseShellExecute = $false
-            $psi.CreateNoWindow = $true
-
-            if ($st.StopRequested) { return }
-            $proc = New-Object System.Diagnostics.Process
-            $proc.StartInfo = $psi
-            $proc.Start() | Out-Null
-
-            # Асинхронный неблокирующий дренаж stderr через .NET Task (чистый BCL, без межпоточных падений PowerShell)
-            $errTask = $proc.StandardError.ReadToEndAsync()
-            $st.ProcessId = $proc.Id
-
-            if ($st.StopRequested) {
-                try { & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null } catch {}
-                return
-            }
-
-            $turnFinished = $false
-
-            while (-not $proc.HasExited) {
-                $line = $proc.StandardOutput.ReadLine()
-                if ($null -eq $line) {
-                    # Конец потока (EOF)
-                    break
-                }
-                if ($line) {
-                    try {
-                        $evt = $line | ConvertFrom-Json
-                        switch ($evt.event) {
-                            "init" {
-                                if ($evt.conversation_id) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.conversation_id })
-                                }
-                            }
-                            "step_update" {
-                                $su = $evt.step_update
-                                if ($su.step_type -eq "agent_response" -and $su.text_delta) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $su.text_delta })
-                                }
-                                elseif ($su.step_type -eq "tool") {
-                                    if ($su.state -eq "ACTIVE") {
-                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "tool_start"; Name = $su.tool_name })
-                                    } elseif ($su.state -eq "DONE") {
-                                        $dur = [math]::Round([double]$su.duration_seconds, 2)
-                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "tool_done"; Name = $su.tool_name; Duration = $dur })
-                                    }
-                                }
-                            }
-                            "result" {
-                                if ($evt.result.conversation_id) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.result.conversation_id })
-                                }
-                                # Получен финальный результат шага генерации - помечаем ход завершенным
-                                $turnFinished = $true
-                            }
-                        }
-                    } catch {
-                        # Если строка не является JSON (например raw лог ошибки)
-                        $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $line })
-                    }
-                }
-                if ($turnFinished) {
-                    break
-                }
-            }
-
-            if (-not $turnFinished) {
-                $rem = $proc.StandardOutput.ReadToEnd()
-                if ($rem) {
-                    foreach ($l in ($rem -split "`r?`n")) {
-                        if ($l) {
-                            try {
-                                $evt = $l | ConvertFrom-Json
-                                if ($evt.event -eq "step_update" -and $evt.step_update.text_delta) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $evt.step_update.text_delta })
-                                } elseif ($evt.event -eq "result") {
-                                    if ($evt.result.conversation_id) {
-                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.result.conversation_id })
-                                    }
-                                    $turnFinished = $true
-                                }
-                            } catch {
-                                $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $l })
-                            }
-                        }
-                    }
-                }
-            }
-
-            # Даем процессу agy.exe до 1500 мс на штатное завершение и освобождение дескрипторов
-            if (-not $proc.WaitForExit(1500)) {
-                try {
-                    if (-not $proc.HasExited) {
-                        & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
-                        if (-not $proc.HasExited) {
-                            $proc.Kill()
-                        }
-                    }
-                } catch {}
-            }
-
-            $errOutput = ""
-            try {
-                if ($errTask) {
-                    $errOutput = $errTask.GetAwaiter().GetResult().Trim()
-                }
-            } catch {}
-
-            if ($st.StopRequested) {
-                # Остановлено пользователем через кнопку "Стоп"
-            } elseif ($turnFinished) {
-                $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
-            } else {
-                if ($errOutput -and $proc.ExitCode -ne 0) {
-                    $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = $errOutput })
-                } else {
-                    $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
-                }
-            }
-        } catch {
-            $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = $_.ToString() })
-        } finally {
-            $st.IsRunning = $false
-        }
-    }) | Out-Null
-
-    $asyncHandle = $ps.BeginInvoke()
+    Start-AgentExecutionJob -Tab $tab -Prompt $fullAgentPrompt -Workspace $workspace -Model $model -Mode $mode -Effort $effort -SkipPerms $skipPerms -ConversationId $convId
 }
-
 $btnSend.Add_Click({
     Send-AgentPrompt
 })
@@ -6332,7 +6722,19 @@ $btnClearAttachments.Add_Click({
 # Обработка клавиатурных событий поля ввода (Enter для отправки, Shift+Enter для новой строки, Ctrl+V для картинок)
 $txtPromptInput.Add_PreviewKeyDown({
     param($sender, $e)
+    # Перехват Alt+M для добавления в очередь или быстрой отправки
+    if ($e.SystemKey -eq [System.Windows.Input.Key]::M -or ($e.Key -eq [System.Windows.Input.Key]::M -and [System.Windows.Input.Keyboard]::Modifiers.HasFlag([System.Windows.Input.ModifierKeys]::Alt))) {
+        $e.Handled = $true
+        Send-AgentPrompt
+        return
+    }
     if ($e.Key -eq [System.Windows.Input.Key]::Enter -or $e.Key -eq [System.Windows.Input.Key]::Return) {
+        # Alt+M или Enter (без Shift): отправка запроса или добавление в очередь
+        if ($e.SystemKey -eq [System.Windows.Input.Key]::M -or ($e.Key -eq [System.Windows.Input.Key]::M -and [System.Windows.Input.Keyboard]::Modifiers.HasFlag([System.Windows.Input.ModifierKeys]::Alt))) {
+            $e.Handled = $true
+            Send-AgentPrompt
+            return
+        }
         if ([System.Windows.Input.Keyboard]::Modifiers.HasFlag([System.Windows.Input.ModifierKeys]::Shift)) {
             # Shift+Enter: вставляем перевод строки в позицию курсора
             $caret = $txtPromptInput.CaretIndex

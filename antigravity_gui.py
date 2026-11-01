@@ -1174,6 +1174,7 @@ class AntigravityGUI(tk.Tk):
         self.suppress_conv_event = False
         self.recent_conversations = []
         self.attached_images = []
+        self.queued_messages = []
         self.preview_images_cache = []
         self.active_tool_card = None
 
@@ -1461,6 +1462,8 @@ class AntigravityGUI(tk.Tk):
         )
         self.txt_prompt.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         self.txt_prompt.bind("<Return>", self._on_enter_pressed)
+        self.txt_prompt.bind("<Alt-m>", lambda e: self.send_prompt())
+        self.root.bind("<Alt-m>", lambda e: self.send_prompt())
         self.txt_prompt.bind("<Control-Return>", lambda e: (self.send_prompt(), "break")[1])
         self.txt_prompt.bind("<Control-v>", self._on_paste_event)
         self.txt_prompt.bind("<Control-V>", self._on_paste_event)
@@ -1471,8 +1474,12 @@ class AntigravityGUI(tk.Tk):
         self.btn_send = ttk.Button(btn_box, text="Отправить ↵", style="Primary.TButton", command=self.send_prompt)
         self.btn_send.pack(fill=tk.BOTH, expand=True, pady=(0, 3))
 
-        self.btn_attach = ttk.Button(btn_box, text="📎 Картинка", command=self._pick_image_files)
-        self.btn_attach.pack(fill=tk.X, pady=(0, 3))
+        attach_box = tk.Frame(btn_box, bg="#1E1E1E")
+        attach_box.pack(fill=tk.X, pady=(0, 3))
+        self.btn_attach = ttk.Button(attach_box, text="📎 Файл", command=self._pick_image_files)
+        self.btn_attach.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        self.btn_attach_folder = ttk.Button(attach_box, text="📁 Папка", command=self._pick_folder)
+        self.btn_attach_folder.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.btn_stop = ttk.Button(btn_box, text="⏹ Стоп", style="Stop.TButton", command=self.stop_execution, state=tk.DISABLED)
         self.btn_stop.pack(fill=tk.X)
@@ -2075,12 +2082,12 @@ class AntigravityGUI(tk.Tk):
         return None
 
     def _pick_image_files(self):
-        """Выбор файлов изображений через диалог."""
+        """Выбор файлов любых типов через диалог."""
         files = filedialog.askopenfilenames(
-            title="Выберите изображения",
+            title="Выберите файлы или изображения",
             filetypes=[
-                ("Изображения", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif"),
-                ("Все файлы", "*.*")
+                ("Все файлы", "*.*"),
+                ("Изображения", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif")
             ]
         )
         if files:
@@ -2088,23 +2095,57 @@ class AntigravityGUI(tk.Tk):
                 self._add_attached_file(f)
             self.txt_prompt.focus_set()
 
+    def _pick_folder(self):
+        """Выбор папки через диалог."""
+        folder = filedialog.askdirectory(title="Выберите папку")
+        if folder:
+            self._add_attached_file(folder)
+            self.txt_prompt.focus_set()
+
     def _add_attached_file(self, file_path):
-        """Добавление файла в список вложений."""
-        if not os.path.isfile(file_path):
+        """Добавление файла или папки в список вложений."""
+        if not os.path.exists(file_path):
             return
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext not in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"]:
+
+        abs_p = os.path.abspath(file_path)
+        if any(item.get("path") == abs_p for item in self.attached_images):
+            return
+
+        if os.path.isdir(file_path):
+            fn = os.path.basename(abs_p) or abs_p
+            self.attached_images.append({
+                "path": abs_p,
+                "name": fn,
+                "type": "Folder",
+                "icon": "📁",
+                "info": f"{fn} (Папка)"
+            })
+            self._render_attachments()
             return
 
         fn = os.path.basename(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
         sz_kb = round(os.path.getsize(file_path) / 1024)
+        sz_str = f"{round(sz_kb / 1024, 1)} MB" if sz_kb > 1024 else f"{sz_kb} KB"
+
+        is_img = ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"]
+        if is_img:
+            icon = "🖼️"
+        elif ext in [".zip", ".rar", ".7z", ".tar", ".gz"]:
+            icon = "📦"
+        elif ext in [".txt", ".md", ".log", ".pdf", ".doc", ".docx"]:
+            icon = "📝"
+        else:
+            icon = "📄"
+
         self.attached_images.append({
-            "path": os.path.abspath(file_path),
+            "path": abs_p,
             "name": fn,
-            "info": f"{fn} ({sz_kb} KB)"
+            "type": "Image" if is_img else "File",
+            "icon": icon,
+            "info": f"{fn} ({sz_str})"
         })
         self._render_attachments()
-
     def _on_paste_event(self, event=None):
         """Обработка Ctrl+V: проверка наличия изображения в буфере обмена."""
         saved_img = self._save_clipboard_image()
@@ -2128,7 +2169,7 @@ class AntigravityGUI(tk.Tk):
             card = tk.Frame(self.frame_attachments_list, bg="#252A30", bd=1, relief=tk.SOLID, padx=6, pady=4)
             card.pack(side=tk.LEFT, padx=(0, 6))
 
-            lbl = tk.Label(card, text=f"🖼️ {item['info']}", fg="#E6EDF3", bg="#252A30", font=("Segoe UI", 9))
+            lbl = tk.Label(card, text=f"{item.get('icon', '📄')} {item['info']}", fg="#E6EDF3", bg="#252A30", font=("Segoe UI", 9))
             lbl.pack(side=tk.LEFT, padx=(0, 4))
 
             btn_del = tk.Button(
@@ -2162,11 +2203,30 @@ class AntigravityGUI(tk.Tk):
         """Отправка промпта агенту."""
         prompt = self.txt_prompt.get("1.0", tk.END).strip()
         has_attachments = len(self.attached_images) > 0
-        if (not prompt and not has_attachments) or self.is_running:
+        if not prompt and not has_attachments:
             return
 
+        if self.is_running:
+            badges = ", ".join(f"{img.get('icon', '📄')} {img['name']}" for img in self.attached_images)
+            img_badge = f"[{badges}]" if badges else ""
+            self.queued_messages.append({
+                "prompt": prompt,
+                "attachments": list(self.attached_images)
+            })
+            time_str = datetime.datetime.now().strftime("%H:%M:%S")
+            self._append_chat(f"\n[Вы ({time_str})]: ", "user_header")
+            self._append_chat("⏳ [В очереди] ", "user_header")
+            if img_badge:
+                self._append_chat(f"{img_badge} ", "badge")
+            self._append_markdown(f"{prompt}\n\n", "user_text")
+            self.txt_prompt.delete("1.0", tk.END)
+            self._clear_attachments()
+            self.lbl_status_text.config(text=f"Агент выполняет задачу... (в очереди: {len(self.queued_messages)})")
+            return        return
+
         if not prompt and has_attachments:
-            prompt = "Пожалуйста, проанализируй прикрепленное изображение."
+            has_other = any(img.get("type") in ["Folder", "File"] for img in self.attached_images)
+            prompt = "Пожалуйста, изучи прикрепленные файлы/папки." if has_other else "Пожалуйста, проанализируй прикрепленное изображение."
 
         ws = self.var_workspace.get().strip()
         if not os.path.isdir(ws):
@@ -2183,15 +2243,21 @@ class AntigravityGUI(tk.Tk):
         full_prompt = prompt
         img_badge = ""
         if has_attachments:
-            img_lines = ["[Прикрепленные изображения:"]
+            only_images = all(img.get("type") == "Image" for img in self.attached_images)
+            header = "[Прикрепленные изображения:" if only_images else "[Прикрепленные файлы, папки и изображения:"
+            img_lines = [header]
             for img in self.attached_images:
                 p = img["path"].replace("\\", "/")
-                img_lines.append(f" - file:///{p}")
+                t_lbl = " (папка)" if img.get("type") == "Folder" else (" (файл)" if img.get("type") == "File" else "")
+                img_lines.append(f" - file:///{p}{t_lbl}")
             img_lines.append("]")
-            img_lines.append("Внимание агенту: обязательно изучи прикрепленные изображения по указанным путям с помощью инструмента read_file.")
+            if only_images:
+                img_lines.append("Внимание агенту: обязательно изучи прикрепленные изображения по указанным путям с помощью инструмента read_file.")
+            else:
+                img_lines.append("Внимание агенту: обязательно изучи прикрепленные файлы, папки или изображения по указанным путям с помощью соответствующих инструментов (read_file для файлов/изображений, или поиск/терминал для папок).")
             full_prompt = "\n".join(img_lines) + "\n\n" + prompt
 
-            badges = ", ".join(f"🖼️ {img['name']}" for img in self.attached_images)
+            badges = ", ".join(f"{img.get('icon', '📄')} {img['name']}" for img in self.attached_images)
             img_badge = f"[{badges}]"
             self._clear_attachments()
 
@@ -2207,7 +2273,7 @@ class AntigravityGUI(tk.Tk):
         self._append_chat("[Antigravity]:\n", "agent_header")
         
         self.is_running = True
-        self.btn_send.config(state=tk.DISABLED)
+        self.btn_send.config(state=tk.NORMAL, text="В очередь ↵")
         self.btn_stop.config(state=tk.NORMAL)
         self.lbl_status_dot.config(fg="#FFA000")
         self.lbl_status_text.config(text="Агент думает и выполняет задачи...")
@@ -2341,8 +2407,13 @@ class AntigravityGUI(tk.Tk):
         finally:
             self.current_process = None
 
-    def stop_execution(self):
+        def stop_execution(self):
         """Остановка запущенного процесса agy.exe и всех его дочерних процессов."""
+        if self.queued_messages:
+            q_cnt = len(self.queued_messages)
+            self.queued_messages.clear()
+            self.event_queue.put(("system", f"Очередь отложенных сообщений ({q_cnt}) была отменена."))
+        self.btn_send.config(state=tk.NORMAL, text="Отправить ↵")
         if self.current_process:
             try:
                 if os.name == 'nt':
@@ -2401,20 +2472,41 @@ class AntigravityGUI(tk.Tk):
                         self.active_tool_card.finalize()
                         self.active_tool_card = None
                     self.is_running = False
-                    self.btn_send.config(state=tk.NORMAL)
-                    self.btn_stop.config(state=tk.DISABLED)
-                    self.lbl_status_dot.config(fg="#4CAF50")
-                    self.lbl_status_text.config(text="Готов к работе")
                     self._append_chat("\n\n")
                     self._update_context_display()
-                    self.txt_prompt.focus()
-                elif evt_type == "error":
+
+                    if self.queued_messages:
+                        next_msg = self.queued_messages.pop(0)
+                        self.is_running = True
+                        self.btn_send.config(state=tk.NORMAL, text="Отправить ↵")
+                        self.btn_stop.config(state=tk.NORMAL)
+                        self.lbl_status_dot.config(fg="#FFA500")
+                        q_cnt = len(self.queued_messages)
+                        self.lbl_status_text.config(text=f"Агент выполняет задачу... (в очереди: {q_cnt})" if q_cnt else "Агент думает и выполняет задачи...")
+                        self._append_chat("[Antigravity]:\n", "agent_header")
+                        worker = threading.Thread(
+                            target=self._run_agent_thread,
+                            args=(next_msg["prompt"], self.var_workspace.get().strip(), self.var_model.get(), self.var_mode.get(), self.var_effort.get(), self.var_skip_perms.get(), self.conversation_id),
+                            daemon=True
+                        )
+                        worker.start()
+                    else:
+                        self.btn_send.config(state=tk.NORMAL, text="Отправить ↵")
+                        self.btn_stop.config(state=tk.DISABLED)
+                        self.lbl_status_dot.config(fg="#4CAF50")
+                        self.lbl_status_text.config(text="Готов к работе")
+                        self.txt_prompt.focus()
+                                elif evt_type == "error":
                     if self.active_tool_card:
                         self.active_tool_card.finalize()
                         self.active_tool_card = None
                     self.is_running = False
+                    if self.queued_messages:
+                        q_cnt = len(self.queued_messages)
+                        self.queued_messages.clear()
+                        self._append_chat(f"\n⚠️ Очередь отложенных сообщений ({q_cnt}) была отменена из-за ошибки выполнения.\n\n", "system")
                     self._append_chat(f"\n❌ [ОШИБКА]: {payload}\n\n", "error")
-                    self.btn_send.config(state=tk.NORMAL)
+                    self.btn_send.config(state=tk.NORMAL, text="Отправить ↵")
                     self.btn_stop.config(state=tk.DISABLED)
                     self.lbl_status_dot.config(fg="#F44336")
                     self.lbl_status_text.config(text="Ошибка выполнения")
