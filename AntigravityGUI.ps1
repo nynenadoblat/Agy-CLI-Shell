@@ -7424,6 +7424,11 @@ function Switch-ConversationFromCombo {
 }
 
 # 1. Р’С‹Р±РѕСЂ РґРёР°Р»РѕРіР° РёР· РІС‹РїР°РґР°СЋС‰РµРіРѕ СЃРїРёСЃРєР° РјС‹С€СЊСЋ (СЃС‚СЂРѕРіРѕ РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃРїРёСЃРєР°, РєРѕРіРґР° РјС‹С€СЊ РѕСЃРІРѕР±РѕР¶РґРµРЅР°)
+$cmbConversations.Add_SelectionChanged({
+    if ($global:SuppressConvComboEvent) { return }
+    Switch-ConversationFromCombo
+})
+
 $cmbConversations.Add_DropDownClosed({
     Switch-ConversationFromCombo
 })
