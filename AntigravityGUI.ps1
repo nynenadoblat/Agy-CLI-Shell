@@ -4058,7 +4058,7 @@ function Show-ContextDetailsDialog {
 
         $diag.ShowDialog() | Out-Null
     } catch {
-        [System.Windows.MessageBox]::Show($stats.ToolTipText, "🧠 Контекстное окно модели", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+            [System.Windows.MessageBox]::Show($stats.ToolTipText, "🧠 Контекстное окно модели", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
     }
 }
 
@@ -4834,7 +4834,7 @@ function Show-UsageLimitsDialog {
                     <DropShadowEffect Color="#1F6FEB" BlurRadius="28" ShadowDepth="0" Opacity="0.4"/>
                 </Border.Effect>
                 <StackPanel HorizontalAlignment="Center">
-                    <TextBlock Text="[вљЎ]" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,10" Foreground="#58A6FF"/>
+                    <TextBlock Text="⚡" FontSize="28" HorizontalAlignment="Center" Margin="0,0,0,10" Foreground="#58A6FF"/>
                     <TextBlock x:Name="TxtDlgLoadingTitle" Text="Загрузка актуальных лимитов..."
                                FontSize="15" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center"/>
                     <TextBlock x:Name="TxtDlgLoadingSubtitle" Text="Запрос к серверам Google AI Pro в реальном времени..."
@@ -5003,7 +5003,7 @@ function Show-UsageLimitsDialog {
         $diag.ShowDialog() | Out-Null
     } catch {
         if (-not ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1'))) {
-            [System.Windows.MessageBox]::Show($stats.ToolTipText, "вљЎ Р›РёРјРёС‚С‹ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ Рё РєРІРѕС‚С‹ API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+            [System.Windows.MessageBox]::Show($stats.ToolTipText, "⚡ Лимиты использования и квоты API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
         } else {
             Write-Warning "Show-UsageLimitsDialog catch: $_"
         }
