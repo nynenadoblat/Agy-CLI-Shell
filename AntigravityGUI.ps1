@@ -7824,35 +7824,40 @@ $txtPromptInput.Add_PreviewKeyDown({
     }
 })
 
-# Поддержка Drag and Drop изображений
-$window.Add_PreviewDragOver({
+# Поддержка Drag and Drop файлов и папок в окно и в поле ввода
+$script:HandleFileDropAction = {
+    param($sender, $e)
+    if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
+        $hasAny = $false
+        foreach ($f in $files) {
+            if (Test-Path -LiteralPath $f) {
+                Add-AttachedItem -Path $f
+                $hasAny = $true
+            }
+        }
+        if ($hasAny) {
+            $e.Handled = $true
+            if ($txtPromptInput) { $txtPromptInput.Focus() }
+        }
+    }
+}
+
+$script:HandleDragOverAction = {
     param($sender, $e)
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $e.Effects = [System.Windows.DragDropEffects]::Copy
         $e.Handled = $true
     }
-})
+}
 
-$window.Add_PreviewDrop({
-    param($sender, $e)
-    if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
-        $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        $hasImg = $false
-        foreach ($f in $files) {
-            $ext = [System.IO.Path]::GetExtension($f).ToLower()
-            if ($ext -in @(".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")) {
-                Add-AttachedImageFile $f
-                $hasImg = $true
-            }
-        }
-        if ($hasImg) {
-            $e.Handled = $true
-            $txtPromptInput.Focus()
-        }
-    }
-})
+$window.Add_PreviewDragOver($script:HandleDragOverAction)
+$window.Add_PreviewDrop($script:HandleFileDropAction)
 
-# Клик по индикатору масштаба сбрасывает его к 100%
+if ($txtPromptInput) {
+    $txtPromptInput.Add_PreviewDragOver($script:HandleDragOverAction)
+    $txtPromptInput.Add_PreviewDrop($script:HandleFileDropAction)
+}
 $txtZoom.Add_MouseDown({
     param($sender, $e)
     if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
