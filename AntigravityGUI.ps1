@@ -4334,15 +4334,27 @@ function Sync-QuotaLiveFromAgy {
     }
 
     # 3. Синхронный живой запрос через agy.exe
-    # Non-blocking async live quota sync
-    if (-not $global:ActiveQuotaSyncJob) {
-        try {
-            Start-QuotaLiveSyncAsync -OnCompleted {
-                Update-LimitsDisplay
-            } | Out-Null
-        } catch {}
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "agy.exe"
+        $psi.Arguments = "-p `"/usage`" --output-format json"
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if (-not $proc.WaitForExit(9000)) {
+            try { $proc.Kill() } catch {}
+            return $global:LiveQuotaCache
+        }
+        $out = $proc.StandardOutput.ReadToEnd()
+        $parsed = Update-QuotaCacheFromJson -RawJson $out
+        if ($parsed) { return $parsed }
+        return $global:LiveQuotaCache
+    } catch {
+        return $global:LiveQuotaCache
     }
-    return $global:LiveQuotaCache
 }
 function Load-QuotaCache {
     if (Test-Path $script:QuotaCacheFilePath) {
@@ -4395,20 +4407,11 @@ function Test-ModelQuotaLive {
     return $null
 }
 
-$script:dailyUsageStatsCache = @{}
-$script:dailyUsageStatsCacheTime = [DateTime]::MinValue
-
 function Get-DailyUsageStats {
     param(
         [string]$modelName = "gemini-3.8-flash-high",
         [switch]$ForceRefresh
     )
-    $now = [DateTime]::Now
-    if (-not $ForceRefresh -and $script:dailyUsageStatsCache -and (($now - $script:dailyUsageStatsCacheTime).TotalSeconds -lt 20)) {
-        if ($script:dailyUsageStatsCache.ContainsKey($modelName)) {
-            return $script:dailyUsageStatsCache[$modelName]
-        }
-    }
     $quota = Get-ModelQuotaLimits -modelName $modelName
     $grp = Get-ModelQuotaGroup -modelName $modelName
     $now = [DateTime]::Now
@@ -4475,45 +4478,36 @@ function Get-DailyUsageStats {
         foreach ($f in $folders) {
             $tPath = Join-Path $f.FullName ".system_generated\logs\transcript.jsonl"
             if (Test-Path $tPath) {
-                try {
-                    $fi = [System.IO.FileInfo]::new($tPath)
-                    $maxScan = 131072
-                    $fs = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-                    try {
-                        if ($fi.Length -gt $maxScan) {
-                            $fs.Seek($fi.Length - $maxScan, [System.IO.SeekOrigin]::Begin) | Out-Null
+                $lines = Get-Content -Path $tPath -Encoding utf8 -ErrorAction SilentlyContinue
+                if ($lines) {
+                    foreach ($line in $lines) {
+                        if ($line -match '"type":\s*"USER_INPUT"') {
+                            $baseReqs++
                         }
-                        $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8)
-                        if ($fi.Length -gt $maxScan) { [void]$sr.ReadLine() }
-                        while (-not $sr.EndOfStream) {
-                            $line = $sr.ReadLine()
-                            if ($line -match '"type":\s*"USER_INPUT"') {
-                                $baseReqs++
-                            }
-                            if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
-                                if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
-                                if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
-                                if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
-                                if ($line -match '"created_at":\s*"([^"]+)"') {
-                                    try {
-                                        $stepTime = [DateTime]::Parse($Matches[1])
-                                        if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
-                                    } catch {}
-                                }
+                        if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
+                            if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
+                            if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
+                            if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
+                            if ($line -match '"created_at":\s*"([^"]+)"') {
+                                try {
+                                    $stepTime = [DateTime]::Parse($Matches[1])
+                                    if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
+                                } catch {}
                             }
                         }
-                    } finally { $fs.Dispose() }
-                } catch {}
+                    }
+                }
             }
         }
     }
+
     $rpmVelocity = [math]::Round(($recentReqs / 5.0), 1)
     $totalReqs = $baseReqs + $global:SessionRequestsDelta
     $rpdPct = if ($quota.MaxRpd -gt 0) { [math]::Round(($totalReqs / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
     $remRpd = [math]::Max(0, ($quota.MaxRpd - $totalReqs))
     $freePct = if ($quota.MaxRpd -gt 0) { [math]::Round(($remRpd / [double]$quota.MaxRpd) * 100.0, 1) } else { 0.0 }
 
-    $resObj = [pscustomobject]@{
+    return [pscustomobject]@{
         ModelName              = $modelName
         DisplayName            = $quota.DisplayName
         GroupName              = $grpDisplayName
@@ -4546,9 +4540,6 @@ function Get-DailyUsageStats {
         LiveClaudeGpt          = $(if ($live) { $live.claude_gpt } else { $null })
         ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`nНажмите для открытия подробного дашборда квот."
     }
-    $script:dailyUsageStatsCache[$modelName] = $resObj
-    $script:dailyUsageStatsCacheTime = [DateTime]::Now
-    return $resObj
 }
 
 function Update-LimitsDisplay {
@@ -4564,18 +4555,18 @@ function Update-LimitsDisplay {
 
     $stats = Get-DailyUsageStats -modelName $modelName
 
-    # 1. РџРѕР»РѕСЃР° РїСЂРѕРіСЂРµСЃСЃР° РЅРµРґРµР»СЊРЅРѕРіРѕ РѕСЃС‚Р°С‚РєР° РєРІРѕС‚С‹
+    # 1. Полоса прогресса недельного остатка квоты
     if ($prgLimits) {
         $prgLimits.Value = $stats.WeeklyPercent
         $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
     }
 
-    # 2. РўРµРєСЃС‚ РѕСЃС‚Р°С‚РєР° РЅРµРґРµР»Рё
+    # 2. Текст остатка недели
     if ($txtLimitsSummary) {
-        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { [regex]::Unescape("\u041d\u0435\u0434\u0435\u043b\u044f: 0.0%") } else { [regex]::Unescape("\u041d\u0435\u0434\u0435\u043b\u044f: $($stats.WeeklyPercent)%") }
+        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { "Неделя: 0.0%" } else { "Неделя: $($stats.WeeklyPercent)%" }
     }
 
-    # 3. Р‘РµР№РґР¶ РїСЂРѕС†РµРЅС‚Р° РґРѕСЃС‚СѓРїРЅРѕСЃС‚Рё
+    # 3. Бейдж процента доступности
     if ($txtLimitsPercent) {
         $txtLimitsPercent.Text = if ($stats.IsApiBlocked) { "0%" } else { "$([math]::Round($stats.WeeklyPercent))%" }
         $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
@@ -4585,25 +4576,22 @@ function Update-LimitsDisplay {
         $borderLimitsBadge.BorderBrush = (Get-CachedBrush $stats.BadgeBorder)
     }
 
-    # 4. РўСѓР»С‚РёРї
+    # 4. Тултип
     if ($borderLimitsWidget) {
         $borderLimitsWidget.ToolTip = $stats.ToolTipText
     }
 
-    # 5. РЈРїСЂР°РІР»РµРЅРёРµ СЃРѕСЃС‚РѕСЏРЅРёРµРј РїРѕР»СЏ РІРІРѕРґР° Рё РѕС‚РїСЂР°РІРєРё РїРѕ СЃС‚Р°С‚СѓСЃСѓ РєРІРѕС‚С‹
+    # 5. Управление состоянием поля ввода и отправки по статусу квоты
     $activeTab = if ($null -ne $global:ActiveTab) { $global:ActiveTab } else { $null }
-    if ($stats.IsApiBlocked) {
-        if ($btnSend) { $btnSend.IsEnabled = $false }
-        if ($txtStatus) { $txtStatus.Text = [regex]::Unescape("\u26d4 \u041b\u0438\u043c\u0438\u0442 API \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d (\u0441\u0431\u0440\u043e\u0441 \u0447\u0435\u0440\u0435\u0437 $($stats.ResetCountdown))") }
-        if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149") }
-    } else {
-        if ($btnSend) { $btnSend.IsEnabled = $true }
-        if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
-        if ($activeTab -and $activeTab.StatusText -match [regex]::Unescape("\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430")) {
-            if ($txtStatus) { $txtStatus.Text = $activeTab.StatusText }
-            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#FFA500") }
+    if ($activeTab -and -not $activeTab.SyncState.IsRunning) {
+        if ($stats.IsApiBlocked) {
+            if ($btnSend) { $btnSend.IsEnabled = $false }
+            if ($txtStatus) { $txtStatus.Text = "⛔ Лимит API исчерпан (сброс через $($stats.ResetCountdown))" }
+            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149") }
         } else {
-            if ($txtStatus) { $txtStatus.Text = [regex]::Unescape("\u0413\u043e\u0442\u043e\u0432 \u043a \u0440\u0430\u0431\u043e\u0442\u0435") }
+            if ($btnSend) { $btnSend.IsEnabled = $true }
+            if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
+            if ($txtStatus) { $txtStatus.Text = "Готов к работе" }
             if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50") }
         }
     }
@@ -4989,6 +4977,7 @@ function Show-UsageLimitsDialog {
         [System.Windows.MessageBox]::Show($stats.ToolTipText, "⚡ Лимиты использования и квоты API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
     }
 }
+
 
 function Get-ConversationPreviewText {
     param([string]$conversationId)
