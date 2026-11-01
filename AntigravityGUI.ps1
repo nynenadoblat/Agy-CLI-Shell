@@ -4040,11 +4040,13 @@ function Show-ContextDetailsDialog {
     try {
         $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
         $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
-        if ($OwnerWindow) {
-            $diag.Owner = $OwnerWindow
-        } elseif ($window) {
-            $diag.Owner = $window
-        }
+        try {
+            if ($OwnerWindow -and $OwnerWindow.IsVisible) {
+                $diag.Owner = $OwnerWindow
+            } elseif ($window -and $window.IsVisible) {
+                $diag.Owner = $window
+            }
+        } catch {}
         if ($window -and $window.Icon) {
             $diag.Icon = $window.Icon
         }
@@ -4271,8 +4273,9 @@ function Start-AsyncQuotaSync {
     $callbacks = New-Object System.Collections.ArrayList
     if ($OnCompleted) { [void]$callbacks.Add($OnCompleted) }
 
-    $timer = New-Object System.Windows.Threading.DispatcherTimer
-    $timer.Interval = [TimeSpan]::FromMilliseconds(120)
+    $startTime = [DateTime]::UtcNow
+    $timer = New-Object System.Windows.Threading.DispatcherTimer([System.Windows.Threading.DispatcherPriority]::Normal)
+    $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 
     $jobObj = [pscustomobject]@{
         PowerShell  = $ps
@@ -4282,13 +4285,18 @@ function Start-AsyncQuotaSync {
     }
     $global:ActiveQuotaSyncJob = $jobObj
 
-    $timer.Add_Tick({
-        if ($asyncResult.IsCompleted) {
+    $tickHandler = {
+        $isDone = ($asyncResult -and $asyncResult.IsCompleted)
+        $isTimeout = (([DateTime]::UtcNow - $startTime).TotalMilliseconds -gt 9500)
+
+        if ($isDone -or $isTimeout) {
             $timer.Stop()
             $rawOut = $null
-            try {
-                $rawOut = $ps.EndInvoke($asyncResult)
-            } catch {}
+            if ($isDone) {
+                try {
+                    $rawOut = $ps.EndInvoke($asyncResult)
+                } catch {}
+            }
             try { $ps.Dispose() } catch {}
 
             if ($rawOut) {
@@ -4302,7 +4310,8 @@ function Start-AsyncQuotaSync {
                 try { & $cb } catch {}
             }
         }
-    })
+    }.GetNewClosure()
+    $timer.Add_Tick($tickHandler)
     $timer.Start()
     return $jobObj
 }
@@ -4599,7 +4608,8 @@ function Update-LimitsDisplay {
 
 function Show-UsageLimitsDialog {
     param(
-        $OwnerWindow = $null
+        $OwnerWindow = $null,
+        [switch]$Headless
     )
     $activeModel = if ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-3.8-flash-high" }
 
@@ -4670,9 +4680,7 @@ function Show-UsageLimitsDialog {
         </DockPanel>
 
         <!-- НЕБЛОКИРУЮЩИЙ БАННЕР СИНХРОНИЗАЦИИ КВОТ -->
-        <Border x:Name="DlgSyncBanner" Grid.Row="1" Background="#162638" BorderBrush="#1F6FEB" BorderThickness="1.2"
-                CornerRadius="6" Padding="12,7" Margin="0,0,0,10"
-                Visibility="$(if (-not $cacheFresh) { 'Visible' } else { 'Collapsed' })">
+        <Border x:Name="DlgSyncBanner" Grid.Row="1" Visibility="Collapsed" Height="0" Margin="0" CornerRadius="6" Padding="0" Background="#162638" BorderBrush="#1F6FEB" BorderThickness="1.2">
             <DockPanel LastChildFill="True">
                 <ProgressBar x:Name="PrgSyncSpinner" IsIndeterminate="True" Width="80" Height="4"
                              DockPanel.Dock="Right" Margin="10,0,0,0" Foreground="#58A6FF"
@@ -4817,17 +4825,23 @@ function Show-UsageLimitsDialog {
         </DockPanel>
 
         <!-- Внутренний оверлей загрузки при необходимости полного перекрытия -->
-        <Grid x:Name="DlgLoadingOverlay" Visibility="Collapsed" Background="#E6181A20" Grid.RowSpan="7">
+                <Grid x:Name="DlgLoadingOverlay" Visibility="$(if (-not $cacheFresh) { 'Visible' } else { 'Collapsed' })"
+              Background="#F212151B" Grid.RowSpan="7">
             <Border HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Background="#252528" BorderBrush="#007ACC" BorderThickness="1.5"
-                    CornerRadius="10" Padding="24,20" Width="340">
+                    Background="#1C212B" BorderBrush="#1F6FEB" BorderThickness="1.5"
+                    CornerRadius="12" Padding="32,26" Width="390">
                 <Border.Effect>
-                    <DropShadowEffect Color="#007ACC" BlurRadius="25" ShadowDepth="0" Opacity="0.4"/>
+                    <DropShadowEffect Color="#1F6FEB" BlurRadius="28" ShadowDepth="0" Opacity="0.4"/>
                 </Border.Effect>
                 <StackPanel HorizontalAlignment="Center">
-                    <TextBlock Text="⚡" FontSize="26" HorizontalAlignment="Center" Margin="0,0,0,8"/>
-                    <TextBlock Text="Обновление квот API..." FontSize="14" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center"/>
-                    <TextBlock Text="Опрос пулов моделей Google AI Pro..." FontSize="11" Foreground="#8B949E" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    <TextBlock Text="[вљЎ]" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,10" Foreground="#58A6FF"/>
+                    <TextBlock x:Name="TxtDlgLoadingTitle" Text="Загрузка актуальных лимитов..."
+                               FontSize="15" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="TxtDlgLoadingSubtitle" Text="Запрос к серверам Google AI Pro в реальном времени..."
+                               FontSize="11.5" Foreground="#79C0FF" HorizontalAlignment="Center" Margin="0,5,0,16"/>
+                    <ProgressBar x:Name="PrgDlgLoading" IsIndeterminate="True" Width="260" Height="5"
+                                 Foreground="#58A6FF" Background="#0D1117" BorderThickness="0" Margin="0,0,0,10"/>
+                    <TextBlock Text="Обычно занимает 3–5 секунд" FontSize="10.5" Foreground="#8B949E" HorizontalAlignment="Center"/>
                 </StackPanel>
             </Border>
         </Grid>
@@ -4837,18 +4851,21 @@ function Show-UsageLimitsDialog {
 
         $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
         $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
-        if ($OwnerWindow) {
-            $diag.Owner = $OwnerWindow
-        } elseif ($window) {
-            $diag.Owner = $window
-        }
+        try {
+            if ($OwnerWindow -and $OwnerWindow.IsVisible) {
+                $diag.Owner = $OwnerWindow
+            } elseif ($window -and $window.IsVisible) {
+                $diag.Owner = $window
+            }
+        } catch {}
         if ($window -and $window.Icon) {
             $diag.Icon = $window.Icon
         }
 
         # Логика обновления всех визуальных контролов окна по свежим данным
         $applyFreshStats = {
-            $updated = Get-DailyUsageStats -modelName $activeModel -ForceRefresh:$false
+            try {
+                $updated = Get-DailyUsageStats -modelName $activeModel -ForceRefresh:$false
 
             $tSub = $diag.FindName("TxtDlgSubtitle")
             if ($tSub) { $tSub.Text = "Модель: $($updated.DisplayName) • Группа: $($updated.GroupName)" }
@@ -4896,6 +4913,8 @@ function Show-UsageLimitsDialog {
             if ($tCountdown) { $tCountdown.Text = "Через $($updated.ResetCountdown)" }
 
             Update-LimitsDisplay -modelName $activeModel
+            $dlgOverlay = $diag.FindName("DlgLoadingOverlay")
+            if ($dlgOverlay) { $dlgOverlay.Visibility = [System.Windows.Visibility]::Collapsed }
 
             $tSync = $diag.FindName("TxtDlgSyncStatus")
             if ($tSync) { $tSync.Text = "✔️ Квоты успешно синхронизированы с Google AI Pro" }
@@ -4911,6 +4930,10 @@ function Show-UsageLimitsDialog {
                 if ($banner) { $banner.Visibility = [System.Windows.Visibility]::Collapsed }
             })
             $bannerHideTimer.Start()
+            } finally {
+                $dlgOverlay = $diag.FindName("DlgLoadingOverlay")
+                if ($dlgOverlay) { $dlgOverlay.Visibility = [System.Windows.Visibility]::Collapsed }
+            }
         }
 
         # Копирование текстового отчета квот
@@ -4944,6 +4967,8 @@ function Show-UsageLimitsDialog {
         $btnRefresh = $diag.FindName("BtnRefreshUsageStats")
         if ($btnRefresh) {
             $btnRefresh.Add_Click({
+                $dlgOverlay = $diag.FindName("DlgLoadingOverlay")
+                if ($dlgOverlay) { $dlgOverlay.Visibility = [System.Windows.Visibility]::Visible }
                 $btnRefresh.IsEnabled = $false
                 $btnRefresh.Content = "⏳ Запрос..."
 
@@ -4972,9 +4997,16 @@ function Show-UsageLimitsDialog {
         })
 
         # Мгновенный показ диалога (< 30 мс)
+        if ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1')) {
+            return $diag
+        }
         $diag.ShowDialog() | Out-Null
     } catch {
-        [System.Windows.MessageBox]::Show($stats.ToolTipText, "⚡ Лимиты использования и квоты API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+        if (-not ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1'))) {
+            [System.Windows.MessageBox]::Show($stats.ToolTipText, "вљЎ Р›РёРјРёС‚С‹ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ Рё РєРІРѕС‚С‹ API", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+        } else {
+            Write-Warning "Show-UsageLimitsDialog catch: $_"
+        }
     }
 }
 
@@ -8079,7 +8111,7 @@ $window.Add_Closing({
 })
 
 # Показ главного окна
-if ($Headless -or $ValidateOnly) {
+if ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1')) {
     Write-Host "[OK] Antigravity GUI успешно инициализирован (Headless mode). Открытых вкладок: $($global:TabsList.Count)"
     $uiTimer.Stop()
     return
