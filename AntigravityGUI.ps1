@@ -4426,11 +4426,24 @@ function Get-DailyUsageStats {
     $now = [DateTime]::Now
 
     # Синхронизация реальных данных Google AI Pro
-    $live = if ($ForceRefresh) {
-        Sync-QuotaLiveFromAgy -Force
-    } else {
-        if ($global:LiveQuotaCache) { $global:LiveQuotaCache } else { Sync-QuotaLiveFromAgy }
+        # РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ СЂРµР°Р»СЊРЅС‹С… РґР°РЅРЅС‹С… Google AI Pro (РЎРўР РћР“Рћ РќР•Р‘Р›РћРљРР РЈР®Р©РђРЇ)
+    if (-not $global:LiveQuotaCache) {
+        Load-QuotaCache
     }
+
+    $needsRefresh = $false
+    if (-not $global:LiveQuotaCache) {
+        $needsRefresh = $true
+    } elseif ($ForceRefresh -or ($global:LiveQuotaCacheTime -and ($now - $global:LiveQuotaCacheTime).TotalSeconds -ge 90)) {
+        $needsRefresh = $true
+    }
+
+        if ($needsRefresh -and (-not $global:ActiveQuotaSyncJob)) {
+        [void](Start-AsyncQuotaSync -OnCompleted {
+            Update-LimitsDisplay
+        })
+    }
+    $live = $global:LiveQuotaCache
 
     $grpData = if ($live -and $live.$grp) { $live.$grp } else { $null }
 
@@ -5439,9 +5452,9 @@ function Populate-ConversationTranscriptToLog {
         $earlierCount = 0
 
         # Виртуализация: если сообщений больше 25, отображаем последние 25 и кнопку подгрузки ранних
-        if (-not $LoadAll -and $turnsList.Count -gt 10) {
-            $earlierCount = $turnsList.Count - 10
-            $renderTurns = $turnsList | Select-Object -Last 10
+        if (-not $LoadAll -and $turnsList.Count -gt 5) {
+            $earlierCount = $turnsList.Count - 5
+            $renderTurns = $turnsList | Select-Object -Last 5
 
             $cardBorder = [System.Windows.Controls.Border]::new()
             $cardBorder.Background = (Get-CachedBrush "#202024")
@@ -7102,6 +7115,7 @@ $uiTimer.Add_Tick({
 
     foreach ($t in @($global:TabsList)) {
         $item = $null
+        if (-not $t.SyncState -or -not $t.SyncState.Queue) { continue }
         while ($t.SyncState.Queue.TryDequeue([ref]$item)) {
             switch ($item.Type) {
                 "token" {
@@ -7443,9 +7457,6 @@ function Switch-ConversationFromCombo {
         } else {
             $convObj = $sel.ConvObj
             if (-not $convObj) {
-                $convObj = (Get-AntigravityConversations) | Where-Object { $_.Id -eq $targetId } | Select-Object -First 1
-            }
-            if (-not $convObj) {
                 $fallbackTitle = if ($sel.TitleStr) { $sel.TitleStr } else { [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 ") + $targetId }
                 $convObj = [pscustomobject]@{
                     Id           = $targetId
@@ -7465,11 +7476,9 @@ function Switch-ConversationFromCombo {
 # 1. Р’С‹Р±РѕСЂ РґРёР°Р»РѕРіР° РёР· РІС‹РїР°РґР°СЋС‰РµРіРѕ СЃРїРёСЃРєР° РјС‹С€СЊСЋ (СЃС‚СЂРѕРіРѕ РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃРїРёСЃРєР°, РєРѕРіРґР° РјС‹С€СЊ РѕСЃРІРѕР±РѕР¶РґРµРЅР°)
 $cmbConversations.Add_SelectionChanged({
     if ($global:SuppressConvComboEvent) { return }
-    Switch-ConversationFromCombo
-})
-
-$cmbConversations.Add_DropDownClosed({
-    Switch-ConversationFromCombo
+    $window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
+        Switch-ConversationFromCombo
+    }.GetNewClosure()) | Out-Null
 })
 
 # 2. Р’С‹Р±РѕСЂ РґРёР°Р»РѕРіР° СЃ РєР»Р°РІРёР°С‚СѓСЂС‹ РєР»Р°РІРёС€РµР№ Enter
