@@ -4132,6 +4132,15 @@ function Get-ModelQuotaGroup {
     return "claude_gpt"
 }
 
+function Format-QuotaCountdown {
+    param([TimeSpan]$diff)
+    if ($diff.TotalSeconds -le 0) { return "" }
+    if ($diff.Days -gt 0) {
+        return '{0}д {1}ч {2}м' -f $diff.Days, $diff.Hours, $diff.Minutes
+    }
+    return '{0}ч {1}м' -f [int][math]::Floor($diff.TotalHours), $diff.Minutes
+}
+
 function Update-QuotaCacheFromJson {
     param(
         [string]$RawJson
@@ -4166,7 +4175,7 @@ function Update-QuotaCacheFromJson {
                     $target = [DateTime]::Parse($weeklyBucket.reset_time).ToUniversalTime()
                     $diff = $target - [DateTime]::UtcNow
                     if ($diff.TotalSeconds -gt 0) {
-                        $wResetsIn = '{0}ч {1}м' -f [int][math]::Floor($diff.TotalHours), $diff.Minutes
+                        $wResetsIn = Format-QuotaCountdown $diff
                     }
                 } catch {}
             }
@@ -4182,7 +4191,7 @@ function Update-QuotaCacheFromJson {
                     $target = [DateTime]::Parse($fiveHourBucket.reset_time).ToUniversalTime()
                     $diff = $target - [DateTime]::UtcNow
                     if ($diff.TotalSeconds -gt 0) {
-                        $fhResetsIn = '{0}ч {1}м' -f [int][math]::Floor($diff.TotalHours), $diff.Minutes
+                        $fhResetsIn = Format-QuotaCountdown $diff
                     }
                 } catch {}
             }
@@ -4377,6 +4386,29 @@ function Load-QuotaCache {
                     if ($json.updated_at) {
                         try { $global:LiveQuotaCacheTime = [DateTime]::Parse($json.updated_at) } catch {}
                     }
+                    foreach ($grpKey in @('gemini', 'claude_gpt')) {
+                        $grpObj = $json.$grpKey
+                        if ($grpObj) {
+                            if ($grpObj.weekly_reset_time) {
+                                try {
+                                    $wTarget = [DateTime]::Parse($grpObj.weekly_reset_time).ToUniversalTime()
+                                    $wDiff = $wTarget - [DateTime]::UtcNow
+                                    if ($wDiff.TotalSeconds -gt 0) {
+                                        $grpObj.weekly_resets_in = Format-QuotaCountdown $wDiff
+                                    }
+                                } catch {}
+                            }
+                            if ($grpObj.five_hour_reset_time) {
+                                try {
+                                    $fhTarget = [DateTime]::Parse($grpObj.five_hour_reset_time).ToUniversalTime()
+                                    $fhDiff = $fhTarget - [DateTime]::UtcNow
+                                    if ($fhDiff.TotalSeconds -gt 0) {
+                                        $grpObj.five_hour_resets_in = Format-QuotaCountdown $fhDiff
+                                    }
+                                } catch {}
+                            }
+                        }
+                    }
                     if ($json.claude_gpt.is_blocked) {
                         $until = if ($json.claude_gpt.weekly_reset_time) { [DateTime]::Parse($json.claude_gpt.weekly_reset_time) } else { $now.AddHours(24) }
                         $global:QuotaGroupBlocked["claude_gpt"] = [pscustomobject]@{
@@ -4463,6 +4495,25 @@ function Get-DailyUsageStats {
         $fiveHourResetsIn = [string]$grpData.five_hour_resets_in
         $fiveHourDisabled = [bool]$grpData.five_hour_disabled
         $isApiBlocked = [bool]$grpData.is_blocked
+
+        if ($weeklyResetTime) {
+            try {
+                $target = [DateTime]::Parse($weeklyResetTime).ToUniversalTime()
+                $diff = $target - [DateTime]::UtcNow
+                if ($diff.TotalSeconds -gt 0) {
+                    $weeklyResetsIn = Format-QuotaCountdown $diff
+                }
+            } catch {}
+        }
+        if ($grpData.five_hour_reset_time) {
+            try {
+                $targetFh = [DateTime]::Parse($grpData.five_hour_reset_time).ToUniversalTime()
+                $diffFh = $targetFh - [DateTime]::UtcNow
+                if ($diffFh.TotalSeconds -gt 0) {
+                    $fiveHourResetsIn = Format-QuotaCountdown $diffFh
+                }
+            } catch {}
+        }
     } else {
         if ($grp -eq "claude_gpt" -and $global:QuotaGroupBlocked.ContainsKey("claude_gpt")) {
             $isApiBlocked = $true
@@ -4635,12 +4686,12 @@ function Show-UsageLimitsDialog {
         $cld = $stats.LiveClaudeGpt
 
         $gemWeeklyPct = if ($gem) { [double]$gem.weekly_percent } else { 94.88 }
-        $gemWeeklyResets = if ($gem -and $gem.weekly_resets_in) { $gem.weekly_resets_in } else { "158ч 42м" }
+        $gemWeeklyResets = if ($gem -and $gem.weekly_resets_in) { $gem.weekly_resets_in } else { "6д 14ч 42м" }
         $gem5hPct = if ($gem) { [double]$gem.five_hour_percent } else { 84.63 }
         $gem5hResets = if ($gem -and $gem.five_hour_resets_in) { $gem.five_hour_resets_in } else { "3ч 41м" }
 
         $cldWeeklyPct = if ($cld) { [double]$cld.weekly_percent } else { 0.0 }
-        $cldWeeklyResets = if ($cld -and $cld.weekly_resets_in) { $cld.weekly_resets_in } else { "95ч 31м" }
+        $cldWeeklyResets = if ($cld -and $cld.weekly_resets_in) { $cld.weekly_resets_in } else { "3д 23ч 31м" }
         $cldBlocked = if ($cld) { [bool]$cld.is_blocked } else { $true }
 
         $isGeminiActive = ($stats.GroupKey -eq "gemini")
