@@ -825,7 +825,7 @@ function Show-ImageViewerWindow {
     [void]$pnlActions.Children.Add($btnFolder)
 
     $btnCopyImg = [System.Windows.Controls.Button]::new()
-    $btnCopyImg.Content = "📋 Копировать"
+    $btnCopyImg.Content = "📋 Картинка"
     $btnCopyImg.ToolTip = "Скопировать изображение в буфер обмена"
     $btnCopyImg.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
     $btnCopyImg.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
@@ -840,13 +840,37 @@ function Show-ImageViewerWindow {
             $t = [System.Windows.Threading.DispatcherTimer]::new()
             $t.Interval = [TimeSpan]::FromMilliseconds(1500)
             $t.Add_Tick({
-                $btnCopyImg.Content = "📋 Копировать"
+                $btnCopyImg.Content = "📋 Картинка"
                 $t.Stop()
             }.GetNewClosure())
             $t.Start()
         } catch {}
     }.GetNewClosure())
     [void]$pnlActions.Children.Add($btnCopyImg)
+
+    $btnCopyPath = [System.Windows.Controls.Button]::new()
+    $btnCopyPath.Content = "📋 Путь"
+    $btnCopyPath.ToolTip = "Скопировать путь к файлу в буфер обмена"
+    $btnCopyPath.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
+    $btnCopyPath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnCopyPath.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnCopyPath.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $btnCopyPath.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
+    $btnCopyPath.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnCopyPath.Add_Click({
+        try {
+            [System.Windows.Clipboard]::SetText($targetPath)
+            $btnCopyPath.Content = "✅ Скопирован!"
+            $t = [System.Windows.Threading.DispatcherTimer]::new()
+            $t.Interval = [TimeSpan]::FromMilliseconds(1500)
+            $t.Add_Tick({
+                $btnCopyPath.Content = "📋 Путь"
+                $t.Stop()
+            }.GetNewClosure())
+            $t.Start()
+        } catch {}
+    }.GetNewClosure())
+    [void]$pnlActions.Children.Add($btnCopyPath)
 
     $btnClose = [System.Windows.Controls.Button]::new()
     $btnClose.Content = "✕"
@@ -1039,11 +1063,17 @@ function Show-ImageViewerWindow {
     $canvasHost.Cursor = [System.Windows.Input.Cursors]::Hand
     [System.Windows.Controls.Grid]::SetRow($canvasHost, 2)
 
+    $innerCanvas = [System.Windows.Controls.Canvas]::new()
+    $innerCanvas.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+    $innerCanvas.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $innerCanvas.Width = 0
+    $innerCanvas.Height = 0
+
     $imgBox = [System.Windows.Controls.Grid]::new()
     $imgBox.Width = $w
     $imgBox.Height = $h
-    $imgBox.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
-    $imgBox.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    [System.Windows.Controls.Canvas]::SetLeft($imgBox, -$w / 2.0)
+    [System.Windows.Controls.Canvas]::SetTop($imgBox, -$h / 2.0)
 
     $imgView = [System.Windows.Controls.Image]::new()
     $imgView.Source = $bi
@@ -1066,7 +1096,8 @@ function Show-ImageViewerWindow {
     $imgBox.RenderTransform = $transformGroup
     $imgBox.RenderTransformOrigin = [System.Windows.Point]::new(0.5, 0.5)
 
-    [void]$canvasHost.Children.Add($imgBox)
+    [void]$innerCanvas.Children.Add($imgBox)
+    [void]$canvasHost.Children.Add($innerCanvas)
     [void]$rootGrid.Children.Add($canvasHost)
 
     # 4. Нижняя панель подсказок и масштабирования
@@ -1121,6 +1152,7 @@ function Show-ImageViewerWindow {
 
     $btnZoomReset = [System.Windows.Controls.Button]::new()
     $btnZoomReset.Content = "1:1"
+    $btnZoomReset.ToolTip = "Масштаб 100% (1:1)"
     $btnZoomReset.Width = 32
     $btnZoomReset.Height = 22
     $btnZoomReset.Margin = [System.Windows.Thickness]::new(6, 0, 0, 0)
@@ -1133,6 +1165,18 @@ function Show-ImageViewerWindow {
     [void]$pnlZoom.Children.Add($lblZoomVal)
     [void]$pnlZoom.Children.Add($btnZoomIn)
     [void]$pnlZoom.Children.Add($btnZoomReset)
+
+    $btnZoomFit = [System.Windows.Controls.Button]::new()
+    $btnZoomFit.Content = "⛶"
+    $btnZoomFit.ToolTip = "Вписать изображение в окно (Клавиша F или 2x клик)"
+    $btnZoomFit.Width = 26
+    $btnZoomFit.Height = 22
+    $btnZoomFit.Margin = [System.Windows.Thickness]::new(4, 0, 0, 0)
+    $btnZoomFit.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $btnZoomFit.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomFit.BorderThickness = [System.Windows.Thickness]::new(0)
+    $btnZoomFit.Cursor = [System.Windows.Input.Cursors]::Hand
+    [void]$pnlZoom.Children.Add($btnZoomFit)
 
     [void]$botGrid.Children.Add($pnlZoom)
     $botBar.Child = $botGrid
@@ -1270,6 +1314,16 @@ function Show-ImageViewerWindow {
         $state.TranslateTransform.Y = 0.0
         $state.LblZoomVal.Text = "100%"
     }.GetNewClosure())
+
+    $PerformZoomFit = {
+        $state.CurrentZoom = $state.InitialZoom
+        $state.ScaleTransform.ScaleX = $state.InitialZoom
+        $state.ScaleTransform.ScaleY = $state.InitialZoom
+        $state.TranslateTransform.X = 0.0
+        $state.TranslateTransform.Y = 0.0
+        $state.LblZoomVal.Text = "$([math]::Round($state.InitialZoom * 100))%"
+    }.GetNewClosure()
+    $btnZoomFit.Add_Click({ & $PerformZoomFit }.GetNewClosure())
 
     # Мышиные события: интерактивное панорамирование и рисование
     $canvasHost.Add_PreviewMouseDown({
@@ -1468,21 +1522,78 @@ function Show-ImageViewerWindow {
         $state.LblZoomVal.Text = "$([math]::Round($state.CurrentZoom * 100))%"
     }.GetNewClosure())
 
-    # Автоматическая подгонка масштаба при загрузке окна
-    $canvasHost.Add_Loaded({
+    # Автоматическая подгонка масштаба при загрузке и изменении размера окна (UpdateFitZoom)
+    $UpdateFitZoom = {
         if ($state.CanvasHost.ActualWidth -gt 50 -and $state.CanvasHost.ActualHeight -gt 50) {
             $vw = $state.CanvasHost.ActualWidth - 20
             $vh = $state.CanvasHost.ActualHeight - 20
             $fit = [math]::Min(1.0, [math]::Min(($vw / $state.Width), ($vh / $state.Height)))
             if ($fit -gt 0.05) {
+                $isInitialOrFit = ([math]::Abs($state.CurrentZoom - $state.InitialZoom) -lt 0.02)
                 $state.InitialZoom = $fit
-                $state.CurrentZoom = $fit
-                $state.ScaleTransform.ScaleX = $fit
-                $state.ScaleTransform.ScaleY = $fit
-                $state.LblZoomVal.Text = "$([math]::Round($fit * 100))%"
+                if ($isInitialOrFit) {
+                    $state.CurrentZoom = $fit
+                    $state.ScaleTransform.ScaleX = $fit
+                    $state.ScaleTransform.ScaleY = $fit
+                    $state.TranslateTransform.X = 0.0
+                    $state.TranslateTransform.Y = 0.0
+                    $state.LblZoomVal.Text = "$([math]::Round($fit * 100))%"
+                }
             }
         }
-    }.GetNewClosure())
+    }.GetNewClosure()
+
+    $canvasHost.Add_Loaded({ & $UpdateFitZoom }.GetNewClosure())
+    $canvasHost.Add_SizeChanged({ & $UpdateFitZoom }.GetNewClosure())
+
+    # Восстановление сохраненных маркеров при повторном открытии того же изображения
+    if ($AttachedItem -and $AttachedItem.PSObject.Properties['SavedShapes'] -and $AttachedItem.SavedShapes) {
+        foreach ($saved in $AttachedItem.SavedShapes) {
+            $brush = [System.Windows.Media.BrushConverter]::new().ConvertFromString($saved.Color)
+            if ($saved.Type -eq "Rect") {
+                $rShape = [System.Windows.Shapes.Rectangle]::new()
+                $rShape.Stroke = $brush
+                $rShape.StrokeThickness = $state.BaseThickness
+                $col = [System.Windows.Media.ColorConverter]::ConvertFromString($saved.Color)
+                $rShape.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromArgb(40, $col.R, $col.G, $col.B))
+                $rShape.RadiusX = 4
+                $rShape.RadiusY = 4
+                [System.Windows.Controls.Canvas]::SetLeft($rShape, $saved.X)
+                [System.Windows.Controls.Canvas]::SetTop($rShape, $saved.Y)
+                $rShape.Width = $saved.W
+                $rShape.Height = $saved.H
+                [void]$state.AnnotCanvas.Children.Add($rShape)
+                $state.ShapesList.Add([pscustomobject]@{
+                    Type    = "Rect"
+                    Element = $rShape
+                    X       = $saved.X
+                    Y       = $saved.Y
+                    W       = $saved.W
+                    H       = $saved.H
+                    Color   = $saved.Color
+                })
+            } elseif ($saved.Type -eq "Arrow") {
+                $aShape = [System.Windows.Shapes.Path]::new()
+                $aShape.Stroke = $brush
+                $aShape.StrokeThickness = $state.BaseThickness
+                $aShape.Fill = $brush
+                $aShape.StrokeStartLineCap = [System.Windows.Media.PenLineCap]::Round
+                $aShape.StrokeEndLineCap = [System.Windows.Media.PenLineCap]::Round
+                $aShape.StrokeLineJoin = [System.Windows.Media.PenLineJoin]::Round
+                $aShape.Data = New-ArrowGeometry -x1 $saved.X1 -y1 $saved.Y1 -x2 $saved.X2 -y2 $saved.Y2 -headLength ($state.BaseThickness * 7.0) -headWidth ($state.BaseThickness * 3.5)
+                [void]$state.AnnotCanvas.Children.Add($aShape)
+                $state.ShapesList.Add([pscustomobject]@{
+                    Type    = "Arrow"
+                    Element = $aShape
+                    X1      = $saved.X1
+                    Y1      = $saved.Y1
+                    X2      = $saved.X2
+                    Y2      = $saved.Y2
+                    Color   = $saved.Color
+                })
+            }
+        }
+    }
 
     # Сохранение и запекание разметки в _annotated.png
     $PerformApply = {
@@ -1538,21 +1649,61 @@ function Show-ImageViewerWindow {
                 $targetAtt = $global:AttachedImages | Where-Object { $_.FilePath -eq $state.TargetPath -or $_.FilePath -eq (Join-Path $dir "${cleanBase}.png") } | Select-Object -First 1
             }
 
+            $savedShapesList = [System.Collections.Generic.List[psobject]]::new()
+            foreach ($sh in $state.ShapesList) {
+                if ($sh.Type -eq "Rect") {
+                    $savedShapesList.Add([pscustomobject]@{
+                        Type  = "Rect"
+                        X     = $sh.X
+                        Y     = $sh.Y
+                        W     = $sh.W
+                        H     = $sh.H
+                        Color = $sh.Color
+                    })
+                } elseif ($sh.Type -eq "Arrow") {
+                    $savedShapesList.Add([pscustomobject]@{
+                        Type  = "Arrow"
+                        X1    = $sh.X1
+                        Y1    = $sh.Y1
+                        X2    = $sh.X2
+                        Y2    = $sh.Y2
+                        Color = $sh.Color
+                    })
+                }
+            }
+
             if ($targetAtt) {
-                $targetAtt.AnnotatedFilePath = $annotatedPath
-                $targetAtt.HasAnnotation = $true
+                if ($targetAtt.PSObject.Properties['AnnotatedFilePath']) {
+                    $targetAtt.AnnotatedFilePath = $annotatedPath
+                } else {
+                    $targetAtt | Add-Member -NotePropertyName "AnnotatedFilePath" -NotePropertyValue $annotatedPath -Force
+                }
+                if ($targetAtt.PSObject.Properties['HasAnnotation']) {
+                    $targetAtt.HasAnnotation = $true
+                } else {
+                    $targetAtt | Add-Member -NotePropertyName "HasAnnotation" -NotePropertyValue $true -Force
+                }
+                if ($targetAtt.PSObject.Properties['SavedShapes']) {
+                    $targetAtt.SavedShapes = $savedShapesList
+                } else {
+                    $targetAtt | Add-Member -NotePropertyName "SavedShapes" -NotePropertyValue $savedShapesList -Force
+                }
             } else {
                 $newItem = [pscustomobject]@{
+                    ItemType          = "Image"
                     FilePath          = $state.TargetPath
                     FileName          = [System.IO.Path]::GetFileName($state.TargetPath)
                     DisplayName       = $cleanBase
                     DimInfo           = "$($state.Width)x$($state.Height) • $([math]::Round((Get-Item $state.TargetPath).Length / 1024)) KB"
                     ImageSource       = $state.BitmapImage
+                    Icon              = "🖼️"
                     AnnotatedFilePath = $annotatedPath
                     HasAnnotation     = $true
+                    SavedShapes       = $savedShapesList
                 }
                 $global:AttachedImages.Add($newItem)
             }
+
 
             Render-AttachmentsUI
 
@@ -1585,12 +1736,25 @@ function Show-ImageViewerWindow {
             & $SwitchMode "Rect"
         } elseif ($e.Key -eq [System.Windows.Input.Key]::A) {
             & $SwitchMode "Arrow"
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::C -and [System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) {
+            try { [System.Windows.Clipboard]::SetImage($bi) } catch {}
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::F) {
+            & $PerformZoomFit
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::D1 -or $e.Key -eq [System.Windows.Input.Key]::NumPad1 -or $e.Key -eq [System.Windows.Input.Key]::D0 -or $e.Key -eq [System.Windows.Input.Key]::NumPad0) {
+            $state.CurrentZoom = 1.0
+            $state.ScaleTransform.ScaleX = 1.0
+            $state.ScaleTransform.ScaleY = 1.0
+            $state.TranslateTransform.X = 0.0
+            $state.TranslateTransform.Y = 0.0
+            $state.LblZoomVal.Text = "100%"
         }
     }.GetNewClosure())
 
     $viewer.Content = $rootGrid
-    $viewer.Show()
-    $viewer.Focus() | Out-Null
+    if (-not ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1'))) {
+        $viewer.Show()
+        $viewer.Focus() | Out-Null
+    }
 }
 
 function Render-AttachmentsUI {
