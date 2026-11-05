@@ -1698,6 +1698,16 @@ if (-not $guiCheckCode2.Contains('BtnCopyUsageSummary') -or -not $guiCheckCode2.
     exit 1
 }
 
+# Проверка наличия и настройки таймера автообновления лимитов раз в 5 минут
+if (-not $limitsAutoRefreshTimer) {
+    Write-Error "В AntigravityGUI.ps1 не найден таймер `$limitsAutoRefreshTimer!"
+    exit 1
+}
+if ($limitsAutoRefreshTimer.Interval.TotalMinutes -ne 5) {
+    Write-Error "Интервал таймера автообновления лимитов не равен 5 минутам ($($limitsAutoRefreshTimer.Interval.TotalMinutes))!"
+    exit 1
+}
+
 # Проверка паритета виджета лимитов в Python (antigravity_gui.py)
 $pyCheckCode = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
 if (-not $pyCheckCode.Contains('get_daily_usage_stats')) {

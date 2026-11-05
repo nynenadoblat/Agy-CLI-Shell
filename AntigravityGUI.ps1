@@ -4775,7 +4775,7 @@ function Get-DailyUsageStats {
         IsApiBlocked           = $isApiBlocked
         LiveGemini             = $(if ($live) { $live.gemini } else { $null })
         LiveClaudeGpt          = $(if ($live) { $live.claude_gpt } else { $null })
-        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`nНажмите для открытия подробного дашборда квот."
+        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`n• Автообновление: каждые 5 мин`nНажмите для открытия подробного дашборда квот."
     }
 }
 
@@ -7556,6 +7556,17 @@ $uiTimer.Add_Tick({
 })
 $uiTimer.Start()
 
+# --- Таймер периодического фонового обновления лимитов и квот API раз в 5 минут ---
+$limitsAutoRefreshTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$limitsAutoRefreshTimer.Interval = [TimeSpan]::FromMinutes(5)
+$limitsAutoRefreshTimer.Add_Tick({
+    if ($global:ActiveQuotaSyncJob) { return }
+    [void](Start-AsyncQuotaSync -OnCompleted {
+        Update-LimitsDisplay
+    })
+})
+$limitsAutoRefreshTimer.Start()
+
 # --- Обработчики событий элементов интерфейса ---
 
 # Выбор папки через диалог
@@ -8316,6 +8327,9 @@ Refresh-ConversationsCombo
 
 # Сохранение конфигурации и завершение фоновых процессов при закрытии окна
 $window.Add_Closing({
+    if ($limitsAutoRefreshTimer) {
+        try { $limitsAutoRefreshTimer.Stop() } catch {}
+    }
     if ($global:TabsList) {
         foreach ($t in @($global:TabsList)) {
             if ($t.SyncState -and $t.SyncState.IsRunning -and $t.SyncState.ProcessId -gt 0) {
@@ -8338,8 +8352,14 @@ $window.Add_Closing({
 if ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1')) {
     Write-Host "[OK] Antigravity GUI успешно инициализирован (Headless mode). Открытых вкладок: $($global:TabsList.Count)"
     $uiTimer.Stop()
+    if ($limitsAutoRefreshTimer) {
+        try { $limitsAutoRefreshTimer.Stop() } catch {}
+    }
     return
 }
 
 $window.ShowDialog() | Out-Null
 $uiTimer.Stop()
+if ($limitsAutoRefreshTimer) {
+    try { $limitsAutoRefreshTimer.Stop() } catch {}
+}
