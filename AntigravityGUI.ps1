@@ -7321,11 +7321,63 @@ $uiTimer.Add_Tick({
             $s = [int]($totalSec % 60)
             $ds = [math]::Floor($sw.Elapsed.Milliseconds / 100)
             $timeStr = '{0:D2}:{1:D2}.{2}' -f $m, $s, $ds
-            $tabItem.StatusText = "⏳ Агент выполняет задачи... ($timeStr)"
+
+            # Мониторинг лога транскрипта на наличие предупреждений об ошибках мощностей API (503 No Capacity)
+            if ($tabItem.ConversationId -and (-not $tabItem.LastWarningCheckMs -or (($sw.ElapsedMilliseconds - $tabItem.LastWarningCheckMs) -ge 1200))) {
+                $tabItem.LastWarningCheckMs = $sw.ElapsedMilliseconds
+                $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$($tabItem.ConversationId)\.system_generated\logs\transcript.jsonl"
+                if (Test-Path $tPath) {
+                    try {
+                        $fi = [System.IO.FileInfo]::new($tPath)
+                        if ($fi.Length -gt 0) {
+                            $fs = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                            $readLen = [Math]::Min(2048L, $fs.Length)
+                            $fs.Seek(-$readLen, [System.IO.SeekOrigin]::End) | Out-Null
+                            $buf = New-Object byte[] $readLen
+                            $fs.Read($buf, 0, [int]$readLen) | Out-Null
+                            $fs.Dispose()
+                            $tail = [System.Text.Encoding]::UTF8.GetString($buf)
+                            if ($tail -match '"error":\s*"API error \(attempt (\d+)\): UNAVAILABLE \(code 503\): No capacity available') {
+                                $attemptNum = $Matches[1]
+                                $stopHint = if ([int]$attemptNum -ge 2) { " [Стоп для отмены]" } else { "" }
+                                $tabItem.ApiWarningText = "⚠️ Дефицит мощностей Google (503, попытка $attemptNum)$stopHint"
+                                $tabItem.ApiWarningColor = "#E2C08D"
+                            } elseif ($tail -match '"error":\s*"API error \(attempt (\d+)\):.*stream idle timeout') {
+                                $attemptNum = $Matches[1]
+                                $tabItem.ApiWarningText = "⚠️ Таймаут стрима API (попытка $attemptNum) [Стоп для отмены]"
+                                $tabItem.ApiWarningColor = "#E2C08D"
+                            } elseif ($tail -match '"error":\s*"API error \(attempt (\d+)\)') {
+                                $attemptNum = $Matches[1]
+                                $tabItem.ApiWarningText = "⚠️ Ошибка API (попытка $attemptNum)..."
+                                $tabItem.ApiWarningColor = "#E2C08D"
+                            } else {
+                                $tabItem.ApiWarningText = $null
+                                $tabItem.ApiWarningColor = $null
+                            }
+                        }
+                    } catch {}
+                }
+            }
+
+            if ($tabItem.ApiWarningText) {
+                $tabItem.StatusText = "$($tabItem.ApiWarningText) ($timeStr)"
+                $tabItem.StatusColor = $tabItem.ApiWarningColor
+                if ($tabItem.HeaderDot) {
+                    $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.ApiWarningColor)
+                }
+            } else {
+                $tabItem.StatusText = "⏳ Агент выполняет задачи... ($timeStr)"
+                $tabItem.StatusColor = "#FFA500"
+                if ($tabItem.HeaderDot) {
+                    $tabItem.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
+                }
+            }
         }
     }
     if ($global:ActiveTab -and $global:ActiveTab.SyncState -and $global:ActiveTab.SyncState.IsRunning) {
         $txtStatus.Text = $global:ActiveTab.StatusText
+        $clr = if ($global:ActiveTab.StatusColor) { $global:ActiveTab.StatusColor } else { "#FFA500" }
+        $statusDot.Fill = (Get-CachedBrush $clr)
     }
 
     foreach ($t in @($global:TabsList)) {
@@ -7334,6 +7386,8 @@ $uiTimer.Add_Tick({
         while ($t.SyncState.Queue.TryDequeue([ref]$item)) {
             switch ($item.Type) {
                 "token" {
+                    $t.ApiWarningText = $null
+                    $t.ApiWarningColor = $null
                     Finalize-ActiveToolGroup -Tab $t
                     if (-not $t.StreamBuffer) {
                         $t.StreamBuffer = [System.Text.StringBuilder]::new()
@@ -7526,27 +7580,53 @@ $uiTimer.Add_Tick({
                             Scroll-ChatLogToEnd
                         }
                     } else {
-                        if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
-                            $qCount = $t.QueuedUserMessages.Count
-                            $t.QueuedUserMessages.Clear()
-                            Append-ChatFormatted -Text "⚠️ Очередь отложенных сообщений ($qCount) была отменена из-за ошибки выполнения.`r`n`r`n" -Color "#FFA500" -Document $t.Document
-                        }
-                        $t.StatusText = "Ошибка выполнения"
-                        $t.StatusColor = "#F85149"
-                        if ($t.HeaderDot) {
-                            $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
-                        }
-                        Append-ChatFormatted -Text "`r`n❌ [ОШИБКА]: $errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
-                        if ($t -eq $global:ActiveTab) {
-                            $btnSend.IsEnabled = $true
-                            $btnSend.Content = "Отправить ↵"
-                            $btnSend.Background = (Get-CachedBrush "#0E639C")
-                            $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
-                            $btnStop.IsEnabled = $false
-                            $txtPromptInput.IsEnabled = $true
-                            $statusDot.Fill = (Get-CachedBrush "#F85149")
-                            $txtStatus.Text = "Ошибка выполнения"
-                            Scroll-ChatLogToEnd
+                        $isCapacityError = ($errMsg -match '503|UNAVAILABLE|No capacity available|capacity|stream idle timeout|context deadline exceeded')
+                        if ($isCapacityError) {
+                            if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
+                                $qCount = $t.QueuedUserMessages.Count
+                                $t.QueuedUserMessages.Clear()
+                                Append-ChatFormatted -Text "⚠️ Очередь отложенных сообщений ($qCount) была отменена из-за дефицита мощностей серверов Google.`r`n`r`n" -Color "#FFA500" -Document $t.Document
+                            }
+                            $t.StatusText = "⚠️ Дефицит мощностей Google (503)"
+                            $t.StatusColor = "#E2C08D"
+                            if ($t.HeaderDot) {
+                                $t.HeaderDot.Fill = (Get-CachedBrush "#E2C08D")
+                            }
+                            Append-ChatFormatted -Text "`r`n⚠️ [СЕРВЕРЫ GOOGLE ПЕРЕГРУЖЕНЫ (503 No Capacity)]: Бэкенд Google временно не имеет свободных мощностей для модели '$($t.Model)'.`r`n💡 Решение: Переключите модель в выпадающем списке сверху на 'gemini-3.8-flash' (без High) или 'gemini-pro'.`r`n`r`n" -Color "#E2C08D" -Bold -Document $t.Document
+                            if ($t -eq $global:ActiveTab) {
+                                $btnSend.IsEnabled = $true
+                                $btnSend.Content = "Отправить ↵"
+                                $btnSend.Background = (Get-CachedBrush "#0E639C")
+                                $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
+                                $btnStop.IsEnabled = $false
+                                $txtPromptInput.IsEnabled = $true
+                                $statusDot.Fill = (Get-CachedBrush "#E2C08D")
+                                $txtStatus.Text = "⚠️ Дефицит мощностей Google (503 No Capacity)"
+                                Scroll-ChatLogToEnd
+                            }
+                        } else {
+                            if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
+                                $qCount = $t.QueuedUserMessages.Count
+                                $t.QueuedUserMessages.Clear()
+                                Append-ChatFormatted -Text "⚠️ Очередь отложенных сообщений ($qCount) была отменена из-за ошибки выполнения.`r`n`r`n" -Color "#FFA500" -Document $t.Document
+                            }
+                            $t.StatusText = "Ошибка выполнения"
+                            $t.StatusColor = "#F85149"
+                            if ($t.HeaderDot) {
+                                $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
+                            }
+                            Append-ChatFormatted -Text "`r`n❌ [ОШИБКА]: $errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
+                            if ($t -eq $global:ActiveTab) {
+                                $btnSend.IsEnabled = $true
+                                $btnSend.Content = "Отправить ↵"
+                                $btnSend.Background = (Get-CachedBrush "#0E639C")
+                                $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
+                                $btnStop.IsEnabled = $false
+                                $txtPromptInput.IsEnabled = $true
+                                $statusDot.Fill = (Get-CachedBrush "#F85149")
+                                $txtStatus.Text = "Ошибка выполнения"
+                                Scroll-ChatLogToEnd
+                            }
                         }
                     }
                 }

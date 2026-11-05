@@ -1724,6 +1724,14 @@ if (-not $pyCheckCode.Contains('_show_usage_limits_dialog')) {
 }
 Write-Host "[OK] Графическое отображение лимитов использования (виджет, расчет квот, дашборд, паритет WPF и Python) валидно." -ForegroundColor Green
 
+# 26. Проверка перехвата и обработки дефицита мощностей API (503 No Capacity)
+$guiCodeCapacity = Get-Content -Path $guiPs1 -Raw -Encoding utf8
+if (-not $guiCodeCapacity.Contains('isCapacityError') -or -not $guiCodeCapacity.Contains('Дефицит мощностей Google')) {
+    Write-Error "В AntigravityGUI.ps1 отсутствует обработка дефицита мощностей серверов Google (503 No Capacity)!"
+    exit 1
+}
+Write-Host "[OK] Логика реал-тайм мониторинга и обработки ошибок дефицита мощностей Google (503 No Capacity) валидна." -ForegroundColor Green
+
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0
 } finally {
