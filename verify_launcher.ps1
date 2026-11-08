@@ -1628,6 +1628,37 @@ if (-not $diskMultiContent.tabs -or $diskMultiContent.tabs.Count -ne 2) {
 }
 Write-Host "[OK] Восстановление нескольких вкладок (Restore-SavedTabs) без усечения и целостность файла конфигурации подтверждены." -ForegroundColor Green
 
+# 23.5. Регрессия: ровно ОДНА сохранённая вкладка обязана восстановиться
+# (раньше массив из одного элемента разворачивался в объект без Count, и вкладка терялась)
+$testSingleCfg = [pscustomobject]@{
+    windowHeight   = 780
+    windowWidth    = 1080
+    fontSize       = 13
+    isMaximized    = $false
+    activeTabIndex = 0
+    tabs           = @(
+        [pscustomobject]@{
+            title          = "Единственная вкладка"
+            conversationId = "conv-single-aaa"
+            workspace      = $launcherDir
+            model          = "gemini-2.5-pro"
+            mode           = "code"
+            effort         = "high"
+            skipPerms      = $true
+        }
+    )
+}
+[System.IO.File]::WriteAllText($cfgPath, ($testSingleCfg | ConvertTo-Json -Depth 5), [System.Text.Encoding]::UTF8)
+$global:TabsList.Clear()
+if ($pnlTabsHeader) { $pnlTabsHeader.Children.Clear() }
+$global:ActiveTab = $null
+Restore-SavedTabs
+if ($global:TabsList.Count -ne 1 -or $global:TabsList[0].Title -ne "Единственная вкладка" -or $global:TabsList[0].ConversationId -ne "conv-single-aaa") {
+    Write-Error "Единственная сохранённая вкладка не восстановилась! Вкладок: $($global:TabsList.Count), название: '$($global:TabsList[0].Title)'"
+    exit 1
+}
+Write-Host "[OK] Восстановление ровно одной сохранённой вкладки подтверждено." -ForegroundColor Green
+
 # 24. Проверка защиты от Pipe Buffer Deadlock и завершения дерева процессов
 $guiCheckCode = Get-Content -Path $guiPs1 -Raw -Encoding utf8
 if (-not $guiCheckCode.Contains('ReadToEndAsync()')) {

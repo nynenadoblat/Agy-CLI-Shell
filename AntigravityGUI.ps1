@@ -647,14 +647,6 @@ $userDataDir = Join-Path $env:APPDATA "AntigravityLauncher"
 if (-not (Test-Path $userDataDir)) {
     New-Item -ItemType Directory -Path $userDataDir -Force | Out-Null
 }
-# Одноразовый перенос старых файлов из папки лаунчера
-foreach ($dataFileName in @("launcher_config.json", "sessions_meta.json")) {
-    $oldDataFile = Join-Path $launcherDir $dataFileName
-    $newDataFile = Join-Path $userDataDir $dataFileName
-    if ((Test-Path $oldDataFile) -and -not (Test-Path $newDataFile)) {
-        Copy-Item -Path $oldDataFile -Destination $newDataFile
-    }
-}
 $configFilePath = if ($env:ANTIGRAVITY_CONFIG_PATH) { $env:ANTIGRAVITY_CONFIG_PATH } else { Join-Path $userDataDir "launcher_config.json" }
 
 # Профили аккаунтов agy (вход хранится в Диспетчере учётных данных Windows)
@@ -681,6 +673,48 @@ function Write-PerfLog {
         try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
     } catch {
         # лог диагностики не должен ронять приложение
+    }
+}
+
+# Читает JSON-файл настроек. Возвращает $null, если файл пустой или повреждён (причина пишется в perf.log).
+function Read-ConfigFile {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -Encoding utf8 -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-PerfLog "Read-ConfigFile: файл пуст: $Path"
+            return $null
+        }
+        return ($raw | ConvertFrom-Json)
+    } catch {
+        Write-PerfLog "Read-ConfigFile: не удалось прочитать '$Path': $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Количество вкладок в файле настроек; нет файла, мусор или пустой список вкладок = 0
+function Get-ConfigTabCount {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    $cfg = Read-ConfigFile -Path $Path
+    if ($null -eq $cfg -or -not $cfg.PSObject.Properties['tabs'] -or -not $cfg.tabs) { return 0 }
+    return @($cfg.tabs).Count
+}
+
+# Одноразовый перенос старых файлов из папки лаунчера в папку пользовательских данных.
+# launcher_config.json переносится и тогда, когда новый файл уже есть, но в нём нет вкладок
+# (создан пустым или повреждён до переноса), а в старом вкладки есть: иначе старые вкладки терялись бы.
+foreach ($dataFileName in @("launcher_config.json", "sessions_meta.json")) {
+    $oldDataFile = Join-Path $launcherDir $dataFileName
+    $newDataFile = Join-Path $userDataDir $dataFileName
+    if (-not (Test-Path -LiteralPath $oldDataFile)) { continue }
+    if (-not (Test-Path -LiteralPath $newDataFile)) {
+        Copy-Item -LiteralPath $oldDataFile -Destination $newDataFile
+        Write-PerfLog "Перенос: '$dataFileName' скопирован из папки лаунчера (нового файла не было)"
+    } elseif ($dataFileName -eq "launcher_config.json" -and (Get-ConfigTabCount -Path $newDataFile) -eq 0 -and (Get-ConfigTabCount -Path ($newDataFile + ".bak")) -eq 0 -and (Get-ConfigTabCount -Path $oldDataFile) -gt 0) {
+        Copy-Item -LiteralPath $newDataFile -Destination ($newDataFile + ".bak-premigrate") -Force
+        Copy-Item -LiteralPath $oldDataFile -Destination $newDataFile -Force
+        Write-PerfLog "Перенос: в новом '$dataFileName' не было вкладок, взят файл из папки лаунчера (копия прежнего: .bak-premigrate)"
     }
 }
 
@@ -2176,32 +2210,27 @@ $global:MinWindowWidth  = 880.0
 $global:MinWindowHeight = 620.0
 
 function Load-LauncherConfig {
-    if (Test-Path $configFilePath) {
-        try {
-            $raw = Get-Content -Path $configFilePath -Raw -Encoding utf8 -ErrorAction SilentlyContinue
-            if ($raw) {
-                return ($raw | ConvertFrom-Json)
-            }
-        } catch {}
+    if (-not (Test-Path -LiteralPath $configFilePath)) { return $null }
+    $cfg = Read-ConfigFile -Path $configFilePath
+    if ($null -eq $cfg) {
+        # Основной файл повреждён (например, процесс убили во время записи): берём предыдущую удачную копию
+        $bakPath = $configFilePath + ".bak"
+        if (Test-Path -LiteralPath $bakPath) {
+            Write-PerfLog "Load-LauncherConfig: основной файл непригоден, читаю резервную копию $bakPath"
+            $cfg = Read-ConfigFile -Path $bakPath
+        }
     }
-    return $null
+    return $cfg
 }
 
 function Save-LauncherConfig {
     try {
         $cfg = @{}
-        if (Test-Path $configFilePath) {
-            try {
-                $raw = Get-Content -Path $configFilePath -Raw -Encoding utf8 -ErrorAction SilentlyContinue
-                if ($raw) {
-                    $existing = $raw | ConvertFrom-Json
-                    if ($existing -is [PSCustomObject]) {
-                        foreach ($prop in $existing.PSObject.Properties) {
-                            $cfg[$prop.Name] = $prop.Value
-                        }
-                    }
-                }
-            } catch {}
+        $existing = Load-LauncherConfig
+        if ($existing -is [PSCustomObject]) {
+            foreach ($prop in $existing.PSObject.Properties) {
+                $cfg[$prop.Name] = $prop.Value
+            }
         }
         $cfg["fontSize"] = [double]$global:CurrentFontSize
 
@@ -2262,7 +2291,16 @@ function Save-LauncherConfig {
             [System.IO.Directory]::CreateDirectory($cfgDir) | Out-Null
         }
         $jsonStr = $cfg | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText($configFilePath, $jsonStr, [System.Text.Encoding]::UTF8)
+        # Атомарная запись: сначала во временный файл, затем подмена целевого. Если процесс убьют
+        # во время записи, в настройках останется прежний целый файл, а не обрезанный.
+        # File.Replace оставляет предыдущую версию в .bak (её читает Load-LauncherConfig при повреждении).
+        $tmpPath = $configFilePath + ".tmp"
+        [System.IO.File]::WriteAllText($tmpPath, $jsonStr, [System.Text.Encoding]::UTF8)
+        if ([System.IO.File]::Exists($configFilePath)) {
+            [System.IO.File]::Replace($tmpPath, $configFilePath, ($configFilePath + ".bak"))
+        } else {
+            [System.IO.File]::Move($tmpPath, $configFilePath)
+        }
     } catch {
         # Сохранение вкладок не должно ронять окно, но и молчать об ошибке нельзя
         Write-PerfLog "Save-LauncherConfig ОШИБКА: $($_.Exception.Message) | в строке $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())"
@@ -6348,6 +6386,7 @@ function Set-ConversationTitle {
                 }
             }
         }
+        Save-LauncherConfig
     }
 
     # 3. Обновление выпадающего списка
@@ -7477,10 +7516,14 @@ function Prev-Tab {
 
 function Restore-SavedTabs {
     $cfg = Load-LauncherConfig
-    $savedTabs = if ($cfg -and $cfg.tabs -and $cfg.tabs.Count -gt 0) { @($cfg.tabs) } else { $null }
+    # Важно: присваивание результата выражения if разворачивает массив из одного элемента в одиночный
+    # объект (PowerShell 5.1), у которого нет свойства Count, и единственная вкладка не восстанавливалась.
+    # Поэтому массив собираем обычным присваиванием, а не через вывод if.
+    $savedTabs = @()
+    if ($cfg -and $cfg.tabs) { $savedTabs = @($cfg.tabs) }
     $activeIdx = if ($cfg -and $null -ne $cfg.activeTabIndex) { [int]$cfg.activeTabIndex } else { 0 }
 
-    if ($savedTabs -and $savedTabs.Count -gt 0) {
+    if ($savedTabs.Count -gt 0) {
         foreach ($st in $savedTabs) {
             $tTitle = if ($st.title) { $st.title } else { "Диалог" }
             $tConvId = if ($st.conversationId) { $st.conversationId } else { $null }
@@ -7651,6 +7694,9 @@ $uiTimer.Add_Tick({
                         $txtConversationId.ToolTip = $item.Id
                     }
                     Save-SessionMetadata -id $item.Id -workspace $t.Workspace -title $t.Title
+                    # ID нового диалога сохраняем сразу: иначе при аварийном завершении лаунчера
+                    # (зависание, снятие задачи) вкладка осталась бы в файле без диалога
+                    Save-LauncherConfig
                     Refresh-ConversationsCombo
                 }
                 "status" {
