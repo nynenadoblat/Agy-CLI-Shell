@@ -59,6 +59,15 @@ def get_launcher_config_path():
     return _user_data_file("launcher_config.json")
 
 
+def get_projects_root():
+    """Корневая папка проектов: ключ projectsRoot в launcher_config.json, иначе папка,
+    в которой лежит папка лаунчера (проекты лежат рядом с ним)."""
+    root = load_launcher_config().get("projectsRoot")
+    if root and os.path.isdir(root):
+        return os.path.abspath(root)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def load_launcher_config():
     """Чтение настроек лаунчера из launcher_config.json."""
     config_path = get_launcher_config_path()
@@ -194,7 +203,8 @@ def get_antigravity_conversations():
                                             pass
                                     if not workspace and line_num < 15:
                                         import re
-                                        m = re.search(r'(?i)(?<![A-Za-z0-9])([A-Za-z]:\\\\(?:[^"\'\r\n\\]+\\\\)*?IGROSTROY(?:\\\\([^\r\n"\'\\]+))?)', line)
+                                        root_json = re.escape(get_projects_root().replace("\\", "\\\\"))
+                                        m = re.search(r'(?i)(' + root_json + r'(?:\\\\([^\r\n"\'\\]+))?)', line)
                                         if m:
                                             workspace = m.group(1).replace("\\\\", "\\")
                                 msg_count = line_num
@@ -1179,9 +1189,7 @@ class AntigravityGUI(tk.Tk):
 
         # Переменные состояния
         self.agy_path = find_agy_executable()
-        self.default_workspace = os.path.abspath(r"H:\IGROSTROY")
-        if not os.path.isdir(self.default_workspace):
-            self.default_workspace = os.getcwd()
+        self.default_workspace = get_projects_root()
 
         self.conversation_id = None
         self.current_process = None

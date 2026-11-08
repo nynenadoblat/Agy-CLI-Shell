@@ -20,7 +20,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 trap {
     $errText = "Фатальная ошибка при выполнении AntigravityGUI.ps1:`r`n$($_)`r`n$($_.ScriptStackTrace)"
     try {
-        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { Join-Path "H:\IGROSTROY\Agy-CLI-Shell" "launcher_error.log" }
+        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { Join-Path $env:TEMP "launcher_error.log" }
         [System.IO.File]::WriteAllText($logF, $errText, [System.Text.Encoding]::UTF8)
         if (-not ($Headless -or $ValidateOnly)) {
             [System.Windows.MessageBox]::Show($errText, "Ошибка запуска Antigravity Launcher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
@@ -38,12 +38,6 @@ if (-not (Test-Path $defaultAgyPath)) {
     if ($foundInPath) {
         $defaultAgyPath = $foundInPath
     }
-}
-
-# --- Корневая папка проектов ---
-$defaultWorkspace = "H:\IGROSTROY"
-if (-not (Test-Path $defaultWorkspace)) {
-    $defaultWorkspace = $PSScriptRoot
 }
 
 # --- XAML Интерфейс в современном темном стиле ---
@@ -245,7 +239,7 @@ if (-not (Test-Path $defaultWorkspace)) {
                     <TextBlock Grid.Column="0" Text="Рабочая папка:" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="SemiBold"/>
                     <TextBox x:Name="TxtWorkspace" Grid.Column="1" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <Button x:Name="BtnBrowseWorkspace" Grid.Column="2" Content="Обзор..." Margin="0,0,8,0" MinWidth="75"/>
-                    <ComboBox x:Name="CmbProjects" Grid.Column="3" ToolTip="Быстрый выбор проекта из папки IGROSTROY"/>
+                    <ComboBox x:Name="CmbProjects" Grid.Column="3" ToolTip="Быстрый выбор проекта из корневой папки проектов"/>
                 </Grid>
 
                 <!-- Строка 2: Настройки модели, режима и параметров мышления -->
@@ -559,7 +553,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 $window.Dispatcher.Add_UnhandledException({
     param($s, $e)
     try {
-        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { Join-Path "H:\IGROSTROY\Agy-CLI-Shell" "launcher_error.log" }
+        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { Join-Path $env:TEMP "launcher_error.log" }
         $errText = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Dispatcher UI Exception: $($e.Exception.Message)`r`n$($e.Exception.StackTrace)`r`n"
         [System.IO.File]::AppendAllText($logF, $errText, [System.Text.Encoding]::UTF8)
     } catch {}
@@ -573,7 +567,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "H:\IGROSTROY\Agy-CLI-Shell"
+    throw "Не удалось определить папку лаунчера (AntigravityGUI.ps1 запущен не как файл)."
 }
 
 # Установка иконки приложения
@@ -645,7 +639,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "H:\IGROSTROY\Agy-CLI-Shell"
+    throw "Не удалось определить папку лаунчера (AntigravityGUI.ps1 запущен не как файл)."
 }
 # Пользовательские данные (вкладки, настройки, названия диалогов) хранятся в папке пользователя,
 # а не рядом со скриптом: %APPDATA%\AntigravityLauncher
@@ -2363,6 +2357,13 @@ if ($txtChatLog.Document) {
 Update-ZoomDisplay
 
 # --- Инициализация списков и значений по умолчанию ---
+# --- Корневая папка проектов ---
+# По умолчанию это папка, в которой лежит папка лаунчера (проекты лежат рядом с ним).
+# Другую папку можно задать ключом "projectsRoot" в launcher_config.json.
+$defaultWorkspace = Split-Path -Parent $launcherDir
+if ($loadedCfg -and $loadedCfg.projectsRoot -and (Test-Path $loadedCfg.projectsRoot)) {
+    $defaultWorkspace = [string]$loadedCfg.projectsRoot
+}
 $txtWorkspace.Text = $defaultWorkspace
 
 # Список доступных моделей
@@ -3690,7 +3691,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "H:\IGROSTROY\Agy-CLI-Shell"
+    throw "Не удалось определить папку лаунчера (AntigravityGUI.ps1 запущен не как файл)."
 }
 $sessionMetaPath = Join-Path $userDataDir "sessions_meta.json"
 $global:LastSentPrompt = ""
@@ -3824,7 +3825,8 @@ function Get-AntigravityConversations {
                                     } catch {}
                                 }
                                 if (-not $workspace) {
-                                    if ($l -match '(?i)(?<![A-Za-z0-9])([A-Za-z]:\\\\(?:[^"''\r\n\\]+\\\\)*?IGROSTROY(?:\\\\([^\r\n"''\\]+))?)') {
+                                    $rootJsonEsc = [regex]::Escape($defaultWorkspace.Replace('\', '\\'))
+                                    if ($l -match "(?i)($rootJsonEsc(?:\\\\([^\r\n`"'\\]+))?)") {
                                         $workspace = $matches[1].Replace('\\', '\')
                                     }
                                 }

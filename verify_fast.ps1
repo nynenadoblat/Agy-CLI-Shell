@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "AntigravityGUI.ps1"))) {
     $PSScriptRoot
 } else {
-    "H:\IGROSTROY\Agy-CLI-Shell"
+    throw "Запустите verify_fast.ps1 из папки лаунчера (рядом с AntigravityGUI.ps1)."
 }
 
 Write-Host "=== [FAST-CHECK] Запуск быстрой проверки целостности Launcher ===" -ForegroundColor Cyan

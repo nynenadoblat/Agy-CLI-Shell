@@ -14,7 +14,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "H:\IGROSTROY\Agy-CLI-Shell"
+    throw "Запустите verify_launcher.ps1 из папки лаунчера (рядом с AntigravityGUI.ps1)."
 }
 
 if ($Fast) {
@@ -239,6 +239,10 @@ if (-not (Test-Path $iconIco) -or (Get-Item $iconIco).Length -eq 0) {
 if (-not (Test-Path $vbsRunner)) {
     Write-Error "Файл Launch-Antigravity.vbs отсутствует!"
     exit 1
+}
+if (-not (Test-Path $folderLnk) -or -not (Test-Path $desktopLnk)) {
+    # Ярлыки привязаны к конкретному компьютеру и в git не хранятся: создаём их под текущие пути
+    & (Join-Path $launcherDir "Setup-Shortcuts.ps1")
 }
 if (-not (Test-Path $folderLnk) -or -not (Test-Path $desktopLnk)) {
     Write-Error "Ярлыки запуска (в папке или на Рабочем столе) не найдены!"
