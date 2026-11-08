@@ -1179,7 +1179,7 @@ class AntigravityGUI(tk.Tk):
 
         # Переменные состояния
         self.agy_path = find_agy_executable()
-        self.default_workspace = os.path.abspath(r"C:\Users\Olden\Desktop\IGROSTROY")
+        self.default_workspace = os.path.abspath(r"H:\IGROSTROY")
         if not os.path.isdir(self.default_workspace):
             self.default_workspace = os.getcwd()
 

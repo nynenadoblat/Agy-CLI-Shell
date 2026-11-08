@@ -20,7 +20,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 trap {
     $errText = "Фатальная ошибка при выполнении AntigravityGUI.ps1:`r`n$($_)`r`n$($_.ScriptStackTrace)"
     try {
-        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher\launcher_error.log" }
+        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { Join-Path "H:\IGROSTROY\Agy-CLI-Shell" "launcher_error.log" }
         [System.IO.File]::WriteAllText($logF, $errText, [System.Text.Encoding]::UTF8)
         if (-not ($Headless -or $ValidateOnly)) {
             [System.Windows.MessageBox]::Show($errText, "Ошибка запуска Antigravity Launcher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
@@ -41,7 +41,7 @@ if (-not (Test-Path $defaultAgyPath)) {
 }
 
 # --- Корневая папка проектов ---
-$defaultWorkspace = "C:\Users\Olden\Desktop\IGROSTROY"
+$defaultWorkspace = "H:\IGROSTROY"
 if (-not (Test-Path $defaultWorkspace)) {
     $defaultWorkspace = $PSScriptRoot
 }
@@ -559,7 +559,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 $window.Dispatcher.Add_UnhandledException({
     param($s, $e)
     try {
-        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher\launcher_error.log" }
+        $logF = if ($PSScriptRoot) { Join-Path $PSScriptRoot "launcher_error.log" } else { Join-Path "H:\IGROSTROY\Agy-CLI-Shell" "launcher_error.log" }
         $errText = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Dispatcher UI Exception: $($e.Exception.Message)`r`n$($e.Exception.StackTrace)`r`n"
         [System.IO.File]::AppendAllText($logF, $errText, [System.Text.Encoding]::UTF8)
     } catch {}
@@ -573,7 +573,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
+    "H:\IGROSTROY\Agy-CLI-Shell"
 }
 
 # Установка иконки приложения
@@ -645,7 +645,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
+    "H:\IGROSTROY\Agy-CLI-Shell"
 }
 # Пользовательские данные (вкладки, настройки, названия диалогов) хранятся в папке пользователя,
 # а не рядом со скриптом: %APPDATA%\AntigravityLauncher
@@ -2263,6 +2263,10 @@ function Save-LauncherConfig {
             $cfg["activeTabIndex"] = $activeIdx
         }
 
+        $cfgDir = [System.IO.Path]::GetDirectoryName($configFilePath)
+        if (-not [string]::IsNullOrEmpty($cfgDir) -and -not [System.IO.Directory]::Exists($cfgDir)) {
+            [System.IO.Directory]::CreateDirectory($cfgDir) | Out-Null
+        }
         $jsonStr = $cfg | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($configFilePath, $jsonStr, [System.Text.Encoding]::UTF8)
     } catch {}
@@ -3686,7 +3690,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
+    "H:\IGROSTROY\Agy-CLI-Shell"
 }
 $sessionMetaPath = Join-Path $userDataDir "sessions_meta.json"
 $global:LastSentPrompt = ""

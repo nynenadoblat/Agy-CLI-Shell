@@ -14,7 +14,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path -and (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "AntigravityGUI.ps1"))) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
+    "H:\IGROSTROY\Agy-CLI-Shell"
 }
 
 if ($Fast) {
@@ -24,6 +24,10 @@ if ($Fast) {
 }
 
 $testCfgPath = Join-Path $launcherDir "scratch\test_launcher_config.json"
+$testCfgDir = Split-Path $testCfgPath
+if (-not (Test-Path $testCfgDir)) {
+    New-Item -ItemType Directory -Path $testCfgDir -Force | Out-Null
+}
 $env:ANTIGRAVITY_CONFIG_PATH = $testCfgPath
 if (Test-Path $testCfgPath) {
     Remove-Item $testCfgPath -Force -ErrorAction SilentlyContinue
@@ -239,6 +243,21 @@ if (-not (Test-Path $vbsRunner)) {
 if (-not (Test-Path $folderLnk) -or -not (Test-Path $desktopLnk)) {
     Write-Error "Ярлыки запуска (в папке или на Рабочем столе) не найдены!"
     exit 1
+}
+
+$wsh = New-Object -ComObject WScript.Shell
+foreach ($lnkPath in @($folderLnk, $desktopLnk)) {
+    $sc = $wsh.CreateShortcut($lnkPath)
+    $cleanArg = ($sc.Arguments -replace '^"|"$', '').Trim()
+    if ($cleanArg -and -not (Test-Path $cleanArg)) {
+        Write-Error "Ярлык $lnkPath указывает на несуществующий целевой файл: '$($sc.Arguments)'!"
+        exit 1
+    }
+    $cleanIcon = ($sc.IconLocation -split ',')[0].Trim()
+    if ($cleanIcon -and -not (Test-Path $cleanIcon)) {
+        Write-Error "Ярлык $lnkPath указывает на несуществующую иконку: '$($sc.IconLocation)'!"
+        exit 1
+    }
 }
 
 $testIcon = [System.Drawing.Icon]::new($iconIco)
@@ -1248,7 +1267,12 @@ if (-not $renameOk) {
 }
 
 # Проверка, что название записалось в sessions_meta.json
-$metaRaw = Get-Content -Path (Join-Path $launcherDir "sessions_meta.json") -Raw -Encoding utf8
+$metaPath = if ($userDataDir -and (Test-Path (Join-Path $userDataDir "sessions_meta.json"))) {
+    Join-Path $userDataDir "sessions_meta.json"
+} else {
+    Join-Path $launcherDir "sessions_meta.json"
+}
+$metaRaw = Get-Content -Path $metaPath -Raw -Encoding utf8
 if (-not $metaRaw.Contains($testCustomTitle) -or -not $metaRaw.Contains($dummyConvId)) {
     Write-Error "sessions_meta.json не содержит обновленного названия '$testCustomTitle' для ID '$dummyConvId'!"
     exit 1
@@ -1301,7 +1325,8 @@ if ($fmt500 -ne "500" -or -not $fmt89k.Contains("k") -or -not $fmt1m.Contains("M
 }
 
 # Проверка вычисления статистики контекста для текущей сессии
-$currentStats = Get-ConversationContextStats -conversationId "d24e3694-008f-4d3c-8ede-76c790903bce" -modelName "gemini-3.8-flash-high"
+$testContextConvId = if ($first) { $first.Id } else { "d24e3694-008f-4d3c-8ede-76c790903bce" }
+$currentStats = Get-ConversationContextStats -conversationId $testContextConvId -modelName "gemini-3.8-flash-high"
 if ($currentStats.TotalTokens -le 0) {
     Write-Error "Get-ConversationContextStats вернул TotalTokens <= 0 для активного диалога!"
     exit 1
@@ -1316,7 +1341,7 @@ if (-not $txtContextTokens) {
     Write-Error "Элемент TxtContextTokens не найден в XAML главного окна!"
     exit 1
 }
-Update-ContextDisplay -conversationId "d24e3694-008f-4d3c-8ede-76c790903bce"
+Update-ContextDisplay -conversationId $testContextConvId
 if (-not $txtContextTokens.Text.Contains("/")) {
     Write-Error "Update-ContextDisplay не установил текст TxtContextTokens! Получено: '$($txtContextTokens.Text)'"
     exit 1
@@ -1364,7 +1389,7 @@ if (-not $txtContextPercent.Text.Contains("%")) {
 }
 
 # Проверка Unicode графической шкалы в предпросмотре диалога
-$previewWithBar = Get-ConversationPreviewText -conversationId "d24e3694-008f-4d3c-8ede-76c790903bce"
+$previewWithBar = Get-ConversationPreviewText -conversationId $testContextConvId
 if (-not $previewWithBar.Contains("Контекстное окно: [") -or -not $previewWithBar.Contains("%")) {
     Write-Error "Get-ConversationPreviewText не содержит Unicode шкалы контекста! Получено:`n$previewWithBar"
     exit 1
