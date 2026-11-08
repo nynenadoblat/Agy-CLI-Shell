@@ -2263,7 +2263,10 @@ function Save-LauncherConfig {
         }
         $jsonStr = $cfg | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($configFilePath, $jsonStr, [System.Text.Encoding]::UTF8)
-    } catch {}
+    } catch {
+        # Сохранение вкладок не должно ронять окно, но и молчать об ошибке нельзя
+        Write-PerfLog "Save-LauncherConfig ОШИБКА: $($_.Exception.Message) | в строке $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())"
+    }
 }
 
 $loadedCfg = Load-LauncherConfig
