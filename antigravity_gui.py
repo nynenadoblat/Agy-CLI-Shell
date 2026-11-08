@@ -32,14 +32,31 @@ def find_agy_executable():
     return candidate
 
 
+def get_user_data_dir():
+    """Папка пользовательских данных лаунчера: %APPDATA%\AntigravityLauncher."""
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    path = os.path.join(base, "AntigravityLauncher")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _user_data_file(name):
+    """Путь к файлу в папке пользователя; старый файл из папки лаунчера переносится один раз."""
+    new_path = os.path.join(get_user_data_dir(), name)
+    old_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    if not os.path.isfile(new_path) and os.path.isfile(old_path):
+        shutil.copy2(old_path, new_path)
+    return new_path
+
+
 def get_session_meta_path():
-    """Путь к файлу sessions_meta.json в папке лаунчера."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions_meta.json")
+    """Путь к файлу sessions_meta.json в папке пользователя."""
+    return _user_data_file("sessions_meta.json")
 
 
 def get_launcher_config_path():
-    """Путь к файлу конфигурации launcher_config.json в папке лаунчера."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher_config.json")
+    """Путь к файлу конфигурации launcher_config.json в папке пользователя."""
+    return _user_data_file("launcher_config.json")
 
 
 def load_launcher_config():

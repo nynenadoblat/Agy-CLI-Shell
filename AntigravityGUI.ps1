@@ -287,6 +287,7 @@ if (-not (Test-Path $defaultWorkspace)) {
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <TextBlock Grid.Column="0" Text="Разговор:" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="SemiBold"/>
@@ -308,7 +309,8 @@ if (-not (Test-Path $defaultWorkspace)) {
                     </ComboBox>
                     <Button x:Name="BtnManageConversations" Grid.Column="2" Content="💬 Все диалоги..." Margin="0,0,6,0" Background="#203348" BorderBrush="#2D4B6E" ToolTip="Открыть полный список всех разговоров с поиском и предпросмотром"/>
                     <Button x:Name="BtnNewChat" Grid.Column="3" Content="➕ Новый диалог" Margin="0,0,6,0" Background="#2A3E2A" BorderBrush="#3B5A3B" ToolTip="Сбросить ID текущего диалога и начать новый"/>
-                    <Button x:Name="BtnLaunchTui" Grid.Column="4" Content="🖥️ Открыть TUI" Background="#2A3245" BorderBrush="#3D4B66" ToolTip="Открыть интерактивную консоль agy с текущим диалогом"/>
+                    <Button x:Name="BtnLaunchTui" Grid.Column="4" Content="🖥️ Открыть TUI" Margin="0,0,6,0" Background="#2A3245" BorderBrush="#3D4B66" ToolTip="Открыть интерактивную консоль agy с текущим диалогом"/>
+                    <Button x:Name="BtnSwitchAccount" Grid.Column="5" Content="🔑 Аккаунт ▾" Background="#3A2F45" BorderBrush="#5A4670" ToolTip="Профили аккаунтов agy: переключение в один клик, сохранение текущего аккаунта, вход в другой аккаунт"/>
                 </Grid>
             </Grid>
         </Border>
@@ -333,6 +335,7 @@ if (-not (Test-Path $defaultWorkspace)) {
                              FontFamily="Consolas, Cascadia Code, Segoe UI"
                              FontSize="13"
                              IsReadOnly="True"
+                             IsUndoEnabled="False"
                              IsDocumentEnabled="True"
                              VerticalScrollBarVisibility="Auto">
                     <FlowDocument PagePadding="0" LineHeight="22" LineStackingStrategy="BlockLineHeight"/>
@@ -593,6 +596,7 @@ $cmbConversations       = $window.FindName("CmbConversations")
 $btnManageConversations = $window.FindName("BtnManageConversations")
 $btnNewChat             = $window.FindName("BtnNewChat")
 $btnLaunchTui           = $window.FindName("BtnLaunchTui")
+$btnSwitchAccount       = $window.FindName("BtnSwitchAccount")
 $borderTabBar           = $window.FindName("BorderTabBar")
 $btnNewTab              = $window.FindName("BtnNewTab")
 $scrollTabs             = $window.FindName("ScrollTabs")
@@ -643,7 +647,87 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } else {
     "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
 }
-$configFilePath = if ($env:ANTIGRAVITY_CONFIG_PATH) { $env:ANTIGRAVITY_CONFIG_PATH } else { Join-Path $launcherDir "launcher_config.json" }
+# Пользовательские данные (вкладки, настройки, названия диалогов) хранятся в папке пользователя,
+# а не рядом со скриптом: %APPDATA%\AntigravityLauncher
+$userDataDir = Join-Path $env:APPDATA "AntigravityLauncher"
+if (-not (Test-Path $userDataDir)) {
+    New-Item -ItemType Directory -Path $userDataDir -Force | Out-Null
+}
+# Одноразовый перенос старых файлов из папки лаунчера
+foreach ($dataFileName in @("launcher_config.json", "sessions_meta.json")) {
+    $oldDataFile = Join-Path $launcherDir $dataFileName
+    $newDataFile = Join-Path $userDataDir $dataFileName
+    if ((Test-Path $oldDataFile) -and -not (Test-Path $newDataFile)) {
+        Copy-Item -Path $oldDataFile -Destination $newDataFile
+    }
+}
+$configFilePath = if ($env:ANTIGRAVITY_CONFIG_PATH) { $env:ANTIGRAVITY_CONFIG_PATH } else { Join-Path $userDataDir "launcher_config.json" }
+
+# Профили аккаунтов agy (вход хранится в Диспетчере учётных данных Windows)
+. (Join-Path $launcherDir "Accounts.ps1")
+
+# --- Диагностика зависаний: perf.log в папке пользовательских данных ---
+# Пишет время тяжёлых этапов и отдельным потоком (UiHangWatchdog) фиксирует, что окно перестало
+# отвечать, и на каком этапе (PerfState.Stage). Этап "-" означает, что зависание не в коде
+# лаунчера, а внутри WPF (раскладка/отрисовка документа).
+$script:perfLogPath = Join-Path $userDataDir "perf.log"
+try {
+    if ((Test-Path $script:perfLogPath) -and ((Get-Item $script:perfLogPath).Length -gt 3MB)) {
+        Move-Item -Path $script:perfLogPath -Destination ($script:perfLogPath + ".old") -Force
+    }
+} catch {}
+$global:PerfState = [hashtable]::Synchronized(@{ Heartbeat = [DateTime]::UtcNow.Ticks; Stage = "-"; StageSince = [DateTime]::UtcNow.Ticks })
+
+function Write-PerfLog {
+    param([string]$Message)
+    try {
+        $line = "[{0:HH:mm:ss.fff}] {1}`r`n" -f [DateTime]::Now, $Message
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+        $fs = [System.IO.File]::Open($script:perfLogPath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+        try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+    } catch {
+        # лог диагностики не должен ронять приложение
+    }
+}
+
+function Set-PerfStage {
+    param([string]$Stage)
+    $global:PerfState.Stage = $Stage
+    $global:PerfState.StageSince = [DateTime]::UtcNow.Ticks
+}
+
+function Start-UiHangWatchdog {
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({
+        param($state, $logPath)
+        function Write-WdLog([string]$m) {
+            try {
+                $line = "[{0:HH:mm:ss.fff}] {1}`r`n" -f [DateTime]::Now, $m
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+                $fs = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+                try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+            } catch {}
+        }
+        $hung = $false
+        $hangStartTicks = 0L
+        while ($true) {
+            Start-Sleep -Milliseconds 500
+            $nowTicks = [DateTime]::UtcNow.Ticks
+            $idleMs = [long](($nowTicks - $state.Heartbeat) / 10000)
+            if ($idleMs -gt 1500) {
+                if (-not $hung) { $hung = $true; $hangStartTicks = $state.Heartbeat }
+                $stageMs = [long](($nowTicks - $state.StageSince) / 10000)
+                Write-WdLog "ЗАВИСАНИЕ: окно не отвечает $idleMs мс; этап: '$($state.Stage)' (в этапе уже $stageMs мс)"
+            } elseif ($hung) {
+                $hung = $false
+                $totalMs = [long](($nowTicks - $hangStartTicks) / 10000)
+                Write-WdLog "ОКНО ОТВЕЧАЕТ СНОВА: зависание длилось около $totalMs мс; последний этап: '$($state.Stage)'"
+            }
+        }
+    }).AddArgument($global:PerfState).AddArgument($script:perfLogPath)
+    [void]$ps.BeginInvoke()
+    Write-PerfLog "=== Запуск лаунчера, watchdog зависаний включён (порог 1500 мс) ==="
+}
 
 # --- Коллекция прикрепленных изображений ---
 $global:AttachedImages = [System.Collections.Generic.List[psobject]]::new()
@@ -2334,7 +2418,11 @@ function Clear-ChatLog {
     $global:ActiveToolGroup = $null
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if ($doc) {
+        $clearSw = [System.Diagnostics.Stopwatch]::StartNew()
         $doc.Blocks.Clear()
+        if ($clearSw.ElapsedMilliseconds -gt 150) {
+            Write-PerfLog "Clear-ChatLog: Blocks.Clear занял $($clearSw.ElapsedMilliseconds) мс"
+        }
     }
 }
 
@@ -2347,12 +2435,19 @@ function Scroll-ChatLogToEnd {
     try {
         $txtChatLog.Dispatcher.BeginInvoke([System.Action]{
             try {
+                $layoutSw = [System.Diagnostics.Stopwatch]::StartNew()
+                Set-PerfStage "scroll: UpdateLayout (раскладка документа WPF)"
                 $txtChatLog.UpdateLayout()
+                $layoutMs = $layoutSw.ElapsedMilliseconds
                 $txtChatLog.ScrollToEnd()
                 $txtChatLog.ScrollToVerticalOffset([double]::MaxValue)
                 if ($txtChatLog.Document -and $txtChatLog.Document.ContentEnd) {
                     $txtChatLog.CaretPosition = $txtChatLog.Document.ContentEnd
                 }
+                if ($layoutSw.ElapsedMilliseconds -gt 150) {
+                    Write-PerfLog "Scroll-ChatLogToEnd: UpdateLayout $layoutMs мс, вместе с прокруткой $($layoutSw.ElapsedMilliseconds) мс"
+                }
+                Set-PerfStage "-"
             } catch {}
         }, [System.Windows.Threading.DispatcherPriority]::Background) | Out-Null
     } catch {}
@@ -2530,6 +2625,10 @@ function Append-MarkdownFormatted {
     $i = 0
     $len = $lines.Length
 
+    # Весь рендер-цикл обёрнут в try/catch: ошибка при разборе одного блока
+    # (код, таблица, inline-markdown со спецсимволами) не должна обнулять весь ответ.
+    # Без этого сложные ответы (## заголовки, ``` блоки, $ символы) молча пропадали.
+    try {
     while ($i -lt $len) {
         $line = $lines[$i]
 
@@ -2860,6 +2959,18 @@ function Append-MarkdownFormatted {
             }
             $doc.Blocks.Add($p)
         }
+    }
+    } catch {
+        # Fallback: если рендер Markdown упал — выводим сырой текст,
+        # чтобы ответ не пропал с экрана полностью
+        try {
+            $p = [System.Windows.Documents.Paragraph]::new()
+            $p.Margin = [System.Windows.Thickness]::new(0, 3, 0, 7)
+            $run = [System.Windows.Documents.Run]::new($Text)
+            $run.Foreground = Get-CachedBrush $BaseColor
+            $p.Inlines.Add($run)
+            $doc.Blocks.Add($p)
+        } catch {}
     }
 
     # Если блок кода не был закрыт до конца файла
@@ -3577,7 +3688,7 @@ $launcherDir = if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "Antig
 } else {
     "C:\Users\Olden\Desktop\IGROSTROY\AntigravityLauncher"
 }
-$sessionMetaPath = Join-Path $launcherDir "sessions_meta.json"
+$sessionMetaPath = Join-Path $userDataDir "sessions_meta.json"
 $global:LastSentPrompt = ""
 $global:SuppressConvComboEvent = $false
 
@@ -3591,7 +3702,7 @@ function Save-SessionMetadata {
 
     try {
         if (-not $sessionMetaPath) {
-            $sessionMetaPath = Join-Path $launcherDir "sessions_meta.json"
+            $sessionMetaPath = Join-Path $userDataDir "sessions_meta.json"
         }
         $meta = @{}
         if (Test-Path $sessionMetaPath) {
@@ -4710,32 +4821,54 @@ function Get-DailyUsageStats {
     $cachedTokens = 0L
     $recentReqs = 0
 
-    if (Test-Path $brainDir) {
+    # Подсчет идёт на основном потоке окна, поэтому: результат кэшируется на 20 секунд
+    # (Update-LimitsDisplay вызывается при каждом переключении диалога), а из каждого
+    # транскрипта читаются только последние 128 КБ, а не весь файл (они бывают по 7 МБ).
+    if (-not $ForceRefresh -and $script:dailyScanCache -and (($now - $script:dailyScanCacheTime).TotalSeconds -lt 20)) {
+        $baseReqs     = $script:dailyScanCache.BaseReqs
+        $inTokens     = $script:dailyScanCache.InTokens
+        $outTokens    = $script:dailyScanCache.OutTokens
+        $cachedTokens = $script:dailyScanCache.CachedTokens
+        $recentReqs   = $script:dailyScanCache.RecentReqs
+    } elseif (Test-Path $brainDir) {
+        $maxScan = 131072
         $folders = Get-ChildItem -Path $brainDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime.Date -ge $today }
         foreach ($f in $folders) {
             $tPath = Join-Path $f.FullName ".system_generated\logs\transcript.jsonl"
             if (Test-Path $tPath) {
-                $lines = Get-Content -Path $tPath -Encoding utf8 -ErrorAction SilentlyContinue
-                if ($lines) {
-                    foreach ($line in $lines) {
-                        if ($line -match '"type":\s*"USER_INPUT"') {
-                            $baseReqs++
+                try {
+                    $fi = [System.IO.FileInfo]::new($tPath)
+                    $fs = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    try {
+                        if ($fi.Length -gt $maxScan) {
+                            $fs.Seek($fi.Length - $maxScan, [System.IO.SeekOrigin]::Begin) | Out-Null
                         }
-                        if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
-                            if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
-                            if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
-                            if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
-                            if ($line -match '"created_at":\s*"([^"]+)"') {
-                                try {
-                                    $stepTime = [DateTime]::Parse($Matches[1])
-                                    if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
-                                } catch {}
+                        $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8)
+                        # Первая строка после смещения может быть обрезана — пропускаем её
+                        if ($fi.Length -gt $maxScan) { [void]$sr.ReadLine() }
+                        while (-not $sr.EndOfStream) {
+                            $line = $sr.ReadLine()
+                            if ($line -match '"type":\s*"USER_INPUT"') {
+                                $baseReqs++
+                            }
+                            if ($line -match '"type":\s*"PLANNER_RESPONSE"') {
+                                if ($line -match '"input_tokens":\s*(\d+)') { $inTokens += [int64]$Matches[1] }
+                                if ($line -match '"output_tokens":\s*(\d+)') { $outTokens += [int64]$Matches[1] }
+                                if ($line -match '"cache_read_tokens":\s*(\d+)') { $cachedTokens += [int64]$Matches[1] }
+                                if ($line -match '"created_at":\s*"([^"]+)"') {
+                                    try {
+                                        $stepTime = [DateTime]::Parse($Matches[1])
+                                        if (($now - $stepTime).TotalMinutes -le 5.0) { $recentReqs++ }
+                                    } catch {}
+                                }
                             }
                         }
-                    }
-                }
+                    } finally { $fs.Dispose() }
+                } catch {}
             }
         }
+        $script:dailyScanCache = @{ BaseReqs = $baseReqs; InTokens = $inTokens; OutTokens = $outTokens; CachedTokens = $cachedTokens; RecentReqs = $recentReqs }
+        $script:dailyScanCacheTime = $now
     }
 
     $rpmVelocity = [math]::Round(($recentReqs / 5.0), 1)
@@ -4976,7 +5109,7 @@ function Show-UsageLimitsDialog {
                 <!-- Недельный лимит Claude/GPT -->
                 <DockPanel Margin="0,0,0,4">
                     <TextBlock Text="📅 Weekly Limit Remaining:" FontSize="12" Foreground="#E2C08D"/>
-                    <TextBlock x:Name="TxtClaudeWeekly" Text="$(if ($cldBlocked) { '0.00% (⛔ Исчерпан • Сброс через ' + $cldWeeklyResets + ')' } else { '$cldWeeklyPct% • Сброс через ' + $cldWeeklyResets })"
+                    <TextBlock x:Name="TxtClaudeWeekly" Text="$(if ($cldBlocked) { '0.00% (⛔ Исчерпан • Сброс через ' + $cldWeeklyResets + ')' } else { ([string]$cldWeeklyPct) + '% • Сброс через ' + $cldWeeklyResets })"
                                FontSize="12" FontWeight="Bold" Foreground="$(if ($cldBlocked) { '#F85149' } else { '#E2C08D' })" HorizontalAlignment="Right"/>
                 </DockPanel>
                 <ProgressBar x:Name="PrgClaudeWeekly" Template="{StaticResource DlgLimitsProgressBarTemplate}"
@@ -5753,6 +5886,20 @@ function Populate-ConversationTranscriptToLog {
                     }
                 }
                 & $flushAll
+
+                # Один ход агента может содержать сотни блоков (в диалоге 0233d93f в одном ходу
+                # 143 текста агента и 220 системных сообщений). Рендер всех блоков за один проход
+                # на основном потоке замораживает окно, поэтому при открытии показываем только
+                # последние блоки хода. Полный ход выводится кнопкой подгрузки ранней истории (-LoadAll).
+                $maxBlocksPerTurn = 30
+                if (-not $LoadAll -and $consolidated.Count -gt $maxBlocksPerTurn) {
+                    $hiddenBlocks = $consolidated.Count - $maxBlocksPerTurn
+                    $consolidated = $consolidated.GetRange($hiddenBlocks, $maxBlocksPerTurn)
+                    Append-ChatFormatted -Text "  ⬆ Скрыто ранних блоков этого хода: $hiddenBlocks (показаны последние $maxBlocksPerTurn)`r`n" -Color "#888888" -Document $doc
+                }
+
+                Set-PerfStage "populate: ход, блоков $($consolidated.Count)"
+                $turnSw = [System.Diagnostics.Stopwatch]::StartNew()
                 foreach ($item in $consolidated) {
                     if ($item.Type -eq "TOOLS") {
                         if (-not $agentHeaderAdded) {
@@ -5768,13 +5915,18 @@ function Populate-ConversationTranscriptToLog {
                             Append-AgentHeader -Document $doc
                             $agentHeaderAdded = $true
                         }
+                        $mdSw = [System.Diagnostics.Stopwatch]::StartNew()
                         Append-MarkdownFormatted -Text $item.Text -Document $doc -BaseColor "#D4D4D4"
+                        if ($mdSw.ElapsedMilliseconds -gt 150) {
+                            Write-PerfLog "  Append-MarkdownFormatted: $($mdSw.ElapsedMilliseconds) мс, длина текста $($item.Text.Length)"
+                        }
                     }
                     elseif ($item.Type -eq "SYSTEM_MESSAGE") {
                         [void](New-SystemMessageCard -Summary $item.Summary -Body $item.Body -StartCollapsed -Document $doc)
                     }
                 }
 
+                Write-PerfLog "  ход: вывод $($consolidated.Count) блоков занял $($turnSw.ElapsedMilliseconds) мс"
                 # 3. Разделительный перенос строки после ответа агента (как в live-чате)
                 if ($agentHeaderAdded) {
                     Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $doc
@@ -5883,7 +6035,13 @@ function Update-TabLoadingJobs {
                     try {
                         # Populate transcript only if conversation id on tab has not changed
                         if ($job.ConvId -eq $t.ConversationId) {
+                            $popSw = [System.Diagnostics.Stopwatch]::StartNew()
+                            $bgMs = [long]([DateTime]::UtcNow - $job.StartTime).TotalMilliseconds
+                            Write-PerfLog "Загрузка диалога $($job.ConvId): фоновый разбор + ожидание $bgMs мс, ходов: $(@($turns).Count)"
+                            Set-PerfStage "loadjob: Populate-ConversationTranscriptToLog"
                             Populate-ConversationTranscriptToLog -Turns $turns -conversationId $job.ConvId -Document $t.Document -Tab $t
+                            Write-PerfLog "Populate-ConversationTranscriptToLog (построение блоков): $($popSw.ElapsedMilliseconds) мс"
+                            Set-PerfStage "loadjob: после Populate"
 
                             $t.StatusText = [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d, \u0433\u043e\u0442\u043e\u0432 \u043a \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u044e")
                             $t.StatusColor = "#4CAF50"
@@ -5894,11 +6052,14 @@ function Update-TabLoadingJobs {
                     } catch {}
 
                     if ($t -eq $global:ActiveTab) {
+                        Set-PerfStage "loadjob: Hide-LoadingOverlay/Scroll/ContextDisplay"
                         Hide-LoadingOverlay
                         $txtStatus.Text = $t.StatusText
                         $statusDot.Fill = (Get-CachedBrush $t.StatusColor)
                         Scroll-ChatLogToEnd
                         Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
+                        Write-PerfLog "Загрузка диалога завершена, UI-часть выполнена; дальше раскладку и отрисовку делает WPF"
+                        Set-PerfStage "-"
                     }
                 }
         }
@@ -5994,16 +6155,29 @@ function Select-ConversationItem {
     }
     }
 
+    $selSw = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-PerfLog "Select-ConversationItem: начало, диалог $($conv.Id)"
     # Clear active chat log immediately to avoid displaying stale conversation while loading
     if ($targetTab -eq $global:ActiveTab) {
+        Set-PerfStage "select: Clear-ChatLog"
         Clear-ChatLog -Document $targetTab.Document
+        Write-PerfLog "  Clear-ChatLog: $($selSw.ElapsedMilliseconds) мс"
     }
     # Launch smooth non-blocking async transcript load
+    Set-PerfStage "select: Start-AsyncTranscriptLoad"
     Start-AsyncTranscriptLoad -conversationId $conv.Id -Tab $targetTab
+    Write-PerfLog "  Start-AsyncTranscriptLoad: накоплено $($selSw.ElapsedMilliseconds) мс"
     $targetTab.IsTranscriptLoaded = $true
+    Set-PerfStage "select: Update-ContextDisplay"
     Update-ContextDisplay -conversationId $conv.Id
+    Write-PerfLog "  Update-ContextDisplay: накоплено $($selSw.ElapsedMilliseconds) мс"
+    Set-PerfStage "select: Update-LimitsDisplay"
     Update-LimitsDisplay
+    Write-PerfLog "  Update-LimitsDisplay: накоплено $($selSw.ElapsedMilliseconds) мс"
+    Set-PerfStage "select: Save-LauncherConfig"
     Save-LauncherConfig
+    Write-PerfLog "Select-ConversationItem: конец, всего $($selSw.ElapsedMilliseconds) мс"
+    Set-PerfStage "-"
 }
 
 function Reset-ToNewChat {
@@ -6133,7 +6307,7 @@ function Set-ConversationTitle {
     # 1. Сохранение в sessions_meta.json
     try {
         if (-not $sessionMetaPath) {
-            $sessionMetaPath = Join-Path $launcherDir "sessions_meta.json"
+            $sessionMetaPath = Join-Path $userDataDir "sessions_meta.json"
         }
         $meta = @{}
         if (Test-Path $sessionMetaPath) {
@@ -6177,13 +6351,14 @@ function Show-RenameDialog {
     param(
         [string]$CurrentTitle,
         [string]$PromptText = "Введите новое название разговора:",
-        $OwnerWindow = $null
+        $OwnerWindow = $null,
+        [string]$DialogTitle = "✏️ Переименование разговора"
     )
 
     $dialogXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="✏️ Переименование разговора"
+        Title="$DialogTitle"
         Height="185" Width="460"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
@@ -6698,6 +6873,9 @@ function New-TabSession {
         FullTranscriptTurns = $null
         IsTranscriptLoaded  = $isLoaded
         TokensThisTurn      = 0
+        LastWarningCheckMs  = 0
+        ApiWarningText      = $null
+        ApiWarningColor     = $null
     }
 
     if ($isLoaded) {
@@ -6820,6 +6998,25 @@ function Finalize-TabStreamingBuffer($Tab) {
         }
         if (-not [string]::IsNullOrEmpty($streamedText)) {
             Append-MarkdownFormatted -Text $streamedText -Document $Tab.Document -BaseColor "#D4D4D4"
+            # Принудительно обновляем layout и прокручиваем вниз после финального рендера Markdown.
+            # Без этого WPF батчит обновления визуального дерева и ответ остаётся невидим
+            # до следующего layout-цикла (или до перезапуска лаунчера).
+            if ($Tab -eq $global:ActiveTab -and $txtChatLog) {
+                try {
+                    $txtChatLog.UpdateLayout()
+                    $txtChatLog.ScrollToEnd()
+                    $txtChatLog.ScrollToVerticalOffset([double]::MaxValue)
+                } catch {}
+                try {
+                    $txtChatLog.Dispatcher.BeginInvoke([System.Action]{
+                        try {
+                            $txtChatLog.UpdateLayout()
+                            $txtChatLog.ScrollToEnd()
+                            $txtChatLog.ScrollToVerticalOffset([double]::MaxValue)
+                        } catch {}
+                    }, [System.Windows.Threading.DispatcherPriority]::Render) | Out-Null
+                } catch {}
+            }
         }
     }
 }
@@ -7310,7 +7507,17 @@ $uiTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $uiTimer.Interval = [TimeSpan]::FromMilliseconds(40)
 
 $uiTimer.Add_Tick({
+    $global:PerfState.Heartbeat = [DateTime]::UtcNow.Ticks
+    $tickSw = [System.Diagnostics.Stopwatch]::StartNew()
+    if ($global:AccountSwitchProcess -and $global:AccountSwitchProcess.HasExited) {
+        $global:AccountSwitchProcess = $null
+        Write-PerfLog "Окно входа в аккаунт закрыто, обновляю лимиты"
+        Update-LimitsAfterAccountChange
+        $window.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [System.Action]{ Invoke-SaveAccountAfterLogin }) | Out-Null
+    }
+    Set-PerfStage "tick: Update-TabLoadingJobs"
     Update-TabLoadingJobs
+    Set-PerfStage "tick: статусы вкладок"
 
     # Живой счетчик времени работы для всех запущенных вкладок
     foreach ($tabItem in @($global:TabsList)) {
@@ -7380,6 +7587,7 @@ $uiTimer.Add_Tick({
         $statusDot.Fill = (Get-CachedBrush $clr)
     }
 
+    Set-PerfStage "tick: очередь событий агента"
     foreach ($t in @($global:TabsList)) {
         $item = $null
         if (-not $t.SyncState -or -not $t.SyncState.Queue) { continue }
@@ -7633,6 +7841,10 @@ $uiTimer.Add_Tick({
             }
         }
     }
+    Set-PerfStage "-"
+    if ($tickSw.ElapsedMilliseconds -gt 150) {
+        Write-PerfLog "tick занял $($tickSw.ElapsedMilliseconds) мс"
+    }
 })
 $uiTimer.Start()
 
@@ -7757,6 +7969,7 @@ function Switch-ConversationFromCombo {
     if (-not $targetId -and -not $currentId) { return }
 
     $global:IsSelectingFromCombo = $true
+    Write-PerfLog "Switch-ConversationFromCombo: выбран диалог '$targetId'"
     try {
         if (-not $targetId) {
             Reset-ToNewChat
@@ -7809,6 +8022,153 @@ $btnLaunchTui.Add_Click({
     $startScript = "Set-Location -LiteralPath '$workspace'; & '$defaultAgyPath' --model '$model' --mode '$mode' $effortArg $skip $convArg"
     Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $startScript
 })
+
+# --- Профили аккаунтов agy (логика хранения: Accounts.ps1) ---
+# Кнопка открывает меню: список профилей (переключение в один клик), сохранение текущего аккаунта
+# как профиля, удаление профиля и вход в новый аккаунт через /logout.
+$global:AccountSwitchProcess = $null
+
+function Update-AccountButtonText {
+    $activeName = (Get-AccountIndex).active
+    $btnSwitchAccount.Content = if ($activeName) { "🔑 $activeName ▾" } else { "🔑 Аккаунт ▾" }
+}
+
+function Update-LimitsAfterAccountChange {
+    $global:LiveQuotaCache = $null
+    [void](Start-AsyncQuotaSync -OnCompleted { Update-LimitsDisplay })
+}
+
+function Confirm-AccountChangeWithRunningTabs {
+    $running = @($global:TabsList | Where-Object { $_.SyncState -and $_.SyncState.IsRunning })
+    if ($running.Count -eq 0) { return $true }
+    $answer = [System.Windows.MessageBox]::Show(
+        "Сейчас агент работает во вкладках: $($running.Count). Их запросы могут завершиться ошибкой при смене аккаунта. Продолжить?",
+        "Смена аккаунта", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+    return ($answer -eq [System.Windows.MessageBoxResult]::Yes)
+}
+
+function Invoke-AccountSwitch([string]$Name) {
+    if (-not (Confirm-AccountChangeWithRunningTabs)) { return }
+    try {
+        Switch-ToAccountProfile -Name $Name
+    } catch {
+        [System.Windows.MessageBox]::Show("Не удалось переключить аккаунт:`r`n$($_.Exception.Message)", "Смена аккаунта", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        return
+    }
+    Update-AccountButtonText
+    Update-LimitsAfterAccountChange
+}
+
+function Invoke-SaveCurrentAccount {
+    if (-not (Test-AgyLoggedIn)) {
+        [System.Windows.MessageBox]::Show("agy сейчас не авторизован. Сначала войдите в аккаунт.", "Профили аккаунтов") | Out-Null
+        return
+    }
+    $idx = Get-AccountIndex
+    $suggest = if ($idx.active) { [string]$idx.active } else { "" }
+    $name = Show-RenameDialog -CurrentTitle $suggest -PromptText "Название профиля для текущего аккаунта:" -DialogTitle "🔑 Сохранение профиля аккаунта" -OwnerWindow $window
+    if (-not $name) { return }
+    $name = $name.Trim()
+    $clash = @($idx.profiles | Where-Object { $_.name -eq $name })
+    if ($clash.Count -gt 0 -and $name -ne $idx.active) {
+        $answer = [System.Windows.MessageBox]::Show("Профиль '$name' уже есть. Заменить его текущим аккаунтом?", "Профили аккаунтов", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+        if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    }
+    Save-CurrentAccountAsProfile -Name $name
+    Update-AccountButtonText
+}
+
+function Invoke-AccountDelete([string]$Name) {
+    $answer = [System.Windows.MessageBox]::Show("Удалить профиль '$Name'? Сам аккаунт при этом не затрагивается, удаляется только сохранённая копия входа.", "Профили аккаунтов", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    Remove-AccountProfile -Name $Name
+    Update-AccountButtonText
+}
+
+function Start-AccountLogoutWindow {
+    if ($global:AccountSwitchProcess -and -not $global:AccountSwitchProcess.HasExited) {
+        [System.Windows.MessageBox]::Show("Окно входа в аккаунт уже открыто. Завершите вход в нём.", "Смена аккаунта") | Out-Null
+        return
+    }
+    $idx = Get-AccountIndex
+    $loggedIn = Test-AgyLoggedIn
+    $confirmText = "Откроется окно agy, в нём автоматически выполнится /logout. Затем выберите вход через Google, войдите в нужный аккаунт и закройте окно: лаунчер предложит сохранить его как профиль."
+    if ($loggedIn -and -not $idx.active) {
+        $confirmText += "`r`n`r`nТекущий аккаунт не сохранён как профиль. Если он нужен, нажмите «Нет», сначала выберите «Сохранить текущий аккаунт как профиль...» в меню кнопки."
+    }
+    $confirmText += "`r`n`r`nПродолжить?"
+    $answer = [System.Windows.MessageBox]::Show($confirmText, "Вход в другой аккаунт", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    if (-not (Confirm-AccountChangeWithRunningTabs)) { return }
+
+    # Перед выходом обновляем копию текущего аккаунта в его профиле (agy мог обновить токены),
+    # а активный профиль сбрасываем, чтобы чужой вход не записался в старый профиль.
+    if ($idx.active -and $loggedIn) { Save-CurrentAccountAsProfile -Name $idx.active }
+    Set-ActiveAccountNone
+    Update-AccountButtonText
+
+    # agy в режиме -i принимает "/logout" как обычное сообщение модели, а не как команду.
+    # Switch-Account.ps1 открывает обычный agy и сам вводит /logout нажатием клавиш в его окне.
+    $switchScript = Join-Path $launcherDir "Switch-Account.ps1"
+    $global:AccountSwitchProcess = Start-Process powershell.exe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$switchScript`"", "-AgyPath", "`"$defaultAgyPath`"") -PassThru
+}
+
+function Invoke-SaveAccountAfterLogin {
+    # Вызывается после закрытия окна входа
+    if (-not (Test-AgyLoggedIn)) { return }
+    $answer = [System.Windows.MessageBox]::Show("Вы вошли в аккаунт. Сохранить его как профиль, чтобы переключаться в один клик?", "Профили аккаунтов", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+    if ($answer -eq [System.Windows.MessageBoxResult]::Yes) { Invoke-SaveCurrentAccount }
+}
+
+$btnSwitchAccount.Add_Click({
+    param($sender, $e)
+    $idx = Get-AccountIndex
+    $menu = [System.Windows.Controls.ContextMenu]::new()
+
+    foreach ($p in $idx.profiles) {
+        $mi = [System.Windows.Controls.MenuItem]::new()
+        $mi.Header = if ($p.name -eq $idx.active) { "✔ $($p.name)" } else { "     $($p.name)" }
+        $mi.Tag = [string]$p.name
+        $mi.Add_Click({ param($s, $ev) Invoke-AccountSwitch ([string]$s.Tag) })
+        [void]$menu.Items.Add($mi)
+    }
+    if ($idx.profiles.Count -eq 0) {
+        $empty = [System.Windows.Controls.MenuItem]::new()
+        $empty.Header = "(профилей пока нет)"
+        $empty.IsEnabled = $false
+        [void]$menu.Items.Add($empty)
+    }
+    [void]$menu.Items.Add([System.Windows.Controls.Separator]::new())
+
+    $miSave = [System.Windows.Controls.MenuItem]::new()
+    $miSave.Header = "➕ Сохранить текущий аккаунт как профиль..."
+    $miSave.Add_Click({ Invoke-SaveCurrentAccount })
+    [void]$menu.Items.Add($miSave)
+
+    if ($idx.profiles.Count -gt 0) {
+        $miDel = [System.Windows.Controls.MenuItem]::new()
+        $miDel.Header = "🗑️ Удалить профиль"
+        foreach ($p in $idx.profiles) {
+            $sub = [System.Windows.Controls.MenuItem]::new()
+            $sub.Header = [string]$p.name
+            $sub.Tag = [string]$p.name
+            $sub.Add_Click({ param($s, $ev) Invoke-AccountDelete ([string]$s.Tag) })
+            [void]$miDel.Items.Add($sub)
+        }
+        [void]$menu.Items.Add($miDel)
+    }
+    [void]$menu.Items.Add([System.Windows.Controls.Separator]::new())
+
+    $miLogout = [System.Windows.Controls.MenuItem]::new()
+    $miLogout.Header = "🔓 Войти в другой аккаунт (выход /logout)..."
+    $miLogout.Add_Click({ Start-AccountLogoutWindow })
+    [void]$menu.Items.Add($miLogout)
+
+    $menu.PlacementTarget = $btnSwitchAccount
+    $menu.Placement = [System.Windows.Controls.Primitives.PlacementMode]::Bottom
+    $menu.IsOpen = $true
+})
+Update-AccountButtonText
 
 # Остановка выполнения
 $btnStop.Add_Click({
@@ -8438,6 +8798,8 @@ if ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1')) {
     return
 }
 
+$global:PerfState.Heartbeat = [DateTime]::UtcNow.Ticks
+Start-UiHangWatchdog
 $window.ShowDialog() | Out-Null
 $uiTimer.Stop()
 if ($limitsAutoRefreshTimer) {

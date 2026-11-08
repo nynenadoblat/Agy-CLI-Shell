@@ -54,7 +54,7 @@ foreach ($f in $psFiles) {
 Write-Host "[OK] Синтаксис всех $($psFiles.Count) .ps1 файлов валиден (0 ошибок AST)." -ForegroundColor Green
 
 # 3. Валидация файла конфигурации launcher_config.json
-$cfgPath = Join-Path $launcherDir "launcher_config.json"
+$cfgPath = Join-Path (Join-Path $env:APPDATA "AntigravityLauncher") "launcher_config.json"
 if (-not (Test-Path $cfgPath)) {
     Write-Error "Файл launcher_config.json не найден!"
     exit 1
