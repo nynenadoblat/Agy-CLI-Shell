@@ -1659,6 +1659,44 @@ if ($global:TabsList.Count -ne 1 -or $global:TabsList[0].Title -ne "Единст
 }
 Write-Host "[OK] Восстановление ровно одной сохранённой вкладки подтверждено." -ForegroundColor Green
 
+# 23.6. Регрессия: отправка сообщения с вложенным ФАЙЛОМ (видео и т.п.) не должна падать
+# (раньше `($_.Icon -or "📄") + " " + имя` давало «Не удается преобразовать "merged.mp4" в тип Int32»)
+if (Test-Path $defaultAgyPath) {
+    $fakeVideo = Join-Path $env:TEMP "verify_attach_merged.mp4"
+    [System.IO.File]::WriteAllBytes($fakeVideo, [byte[]](0, 1, 2, 3))
+    try {
+        Clear-AttachedImages
+        Add-AttachedItem -Path $fakeVideo
+        if ($global:AttachedImages.Count -ne 1 -or $global:AttachedImages[0].ItemType -ne "File") {
+            Write-Error "Видео-файл не добавился во вложения как ItemType=File!"
+            exit 1
+        }
+        # IsRunning=$true направляет отправку в очередь, процесс agy при этом не запускается
+        $sendTab = $global:ActiveTab
+        $sendTab.SyncState.IsRunning = $true
+        $txtWorkspace.Text = $launcherDir
+        $txtPromptInput.Text = "проверка отправки с видео"
+        $sendError = $null
+        try { Send-AgentPrompt } catch { $sendError = $_.Exception.Message }
+        $sendTab.SyncState.IsRunning = $false
+        if ($sendError) {
+            Write-Error "Send-AgentPrompt с вложенным видео упал: $sendError"
+            exit 1
+        }
+        if (-not $sendTab.QueuedUserMessages -or $sendTab.QueuedUserMessages.Count -lt 1 -or $sendTab.QueuedUserMessages[$sendTab.QueuedUserMessages.Count - 1].Badges -notmatch 'verify_attach_merged\.mp4') {
+            Write-Error "Сообщение с видео не попало в очередь или бейдж вложения неверен!"
+            exit 1
+        }
+        $sendTab.QueuedUserMessages.Clear()
+    } finally {
+        Remove-Item -LiteralPath $fakeVideo -Force -ErrorAction SilentlyContinue
+        Clear-AttachedImages
+    }
+    Write-Host "[OK] Отправка сообщения с вложенным видео-файлом (Send-AgentPrompt) не падает." -ForegroundColor Green
+} else {
+    Write-Host "[SKIP] agy.exe не найден — тест отправки с видео пропущен." -ForegroundColor Yellow
+}
+
 # 24. Проверка защиты от Pipe Buffer Deadlock и завершения дерева процессов
 $guiCheckCode = Get-Content -Path $guiPs1 -Raw -Encoding utf8
 if (-not $guiCheckCode.Contains('ReadToEndAsync()')) {

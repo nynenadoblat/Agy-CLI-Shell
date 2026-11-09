@@ -8568,7 +8568,9 @@ function Send-AgentPrompt {
         } elseif ($_.ItemType -eq "Folder" -or ($_.FilePath -and (Test-Path -LiteralPath $_.FilePath -PathType Container))) {
             "📁 " + $_.DisplayName
         } elseif ($_.ItemType -eq "File") {
-            ($_.Icon -or "📄") + " " + $_.DisplayName
+            # Не `($_.Icon -or "📄")`: -or возвращает булево значение, и сложение со строкой падает
+            $fileIcon = if ($_.Icon) { $_.Icon } else { "📄" }
+            "$fileIcon $($_.DisplayName)"
         } else {
             "🖼️ " + $_.DisplayName
         }
