@@ -67,6 +67,26 @@ if (-not (Test-Path $defaultAgyPath)) {
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="6,4"/>
             <Setter Property="CaretBrush" Value="#007ACC"/>
+            <!-- Свой шаблон: стандартный шаблон WPF красит отключённый TextBox в светло-серый и игнорирует Background -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TextBox}">
+                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#1E1E1E"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#2D2D30"/>
+                                <Setter Property="Foreground" Value="#6E6E6E"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="#007ACC"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <!-- Шаблон кнопки ToggleButton для выпадающих списков (тёмный закрытый ComboBox) -->
         <ControlTemplate x:Key="ComboBoxToggleButtonTemplate" TargetType="{x:Type ToggleButton}">
@@ -7335,10 +7355,21 @@ function Switch-ToTab {
     Update-LimitsDisplay -modelName $Tab.Model
 
     # Состояние кнопок отправки / остановки
+    # Пока агент работает, ввод и кнопка остаются доступными: сообщение уходит в очередь
+    # (то же состояние, что выставляет Send-AgentPrompt при старте задачи)
     $isRunning = [bool]$Tab.SyncState.IsRunning
-    $btnSend.IsEnabled = -not $isRunning
+    $btnSend.IsEnabled = $true
+    $txtPromptInput.IsEnabled = $true
     $btnStop.IsEnabled = $isRunning
-    $txtPromptInput.IsEnabled = -not $isRunning
+    if ($isRunning) {
+        $btnSend.Content = "В очередь ↵"
+        $btnSend.Background = (Get-CachedBrush "#B07010")
+        $btnSend.ToolTip = "Добавить сообщение в очередь (Enter или Alt+M)"
+    } else {
+        $btnSend.Content = "Отправить ↵"
+        $btnSend.Background = (Get-CachedBrush "#0E639C")
+        $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
+    }
 
     # Обновляем визуальное выделение заголовков вкладок
     Update-TabHeadersVisual

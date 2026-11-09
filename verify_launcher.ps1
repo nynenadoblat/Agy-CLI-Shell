@@ -1697,6 +1697,34 @@ if (Test-Path $defaultAgyPath) {
     Write-Host "[SKIP] agy.exe не найден — тест отправки с видео пропущен." -ForegroundColor Yellow
 }
 
+# 23.7. Регрессия: пока агент работает, при переключении на вкладку ввод и кнопка остаются доступными (режим очереди),
+# а отключённый TextBox не красится в светло-серый стандартным шаблоном WPF
+$runTab = $global:ActiveTab
+$idleTab = Add-NewTab -Title "Простаивающая" -Select -SkipSave
+# переключение на работающую вкладку с другой (повтор на уже активную вкладку выходит раньше)
+$runTab.SyncState.IsRunning = $true
+Switch-ToTab -Tab $runTab -SkipSave
+$runInputOk = ($txtPromptInput.IsEnabled -eq $true -and $btnSend.IsEnabled -eq $true -and $btnStop.IsEnabled -eq $true -and $btnSend.Content -like "В очередь*")
+# и обратно на неработающую: кнопка обязана вернуться в режим «Отправить»
+$runTab.SyncState.IsRunning = $false
+Switch-ToTab -Tab $idleTab -SkipSave
+$idleBtnOk = ($btnSend.Content -like "Отправить*" -and $btnStop.IsEnabled -eq $false -and $txtPromptInput.IsEnabled -eq $true)
+Close-Tab -Tab $idleTab
+if (-not $runInputOk) {
+    Write-Error "У работающей вкладки поле ввода/кнопка отключены или нет режима 'В очередь' (Switch-ToTab)!"
+    exit 1
+}
+if (-not $idleBtnOk) {
+    Write-Error "После переключения на неработающую вкладку кнопка не вернулась в режим 'Отправить'!"
+    exit 1
+}
+$guiTbCode = Get-Content -Path $guiPs1 -Raw -Encoding utf8
+if ($guiTbCode -notmatch '(?s)<Style TargetType="TextBox">.*?<Trigger Property="IsEnabled" Value="False">.*?TargetName="border" Property="Background".*?</Style>') {
+    Write-Error "В стиле TextBox нет тёмного оформления для отключённого состояния!"
+    exit 1
+}
+Write-Host "[OK] Ввод доступен во время работы агента (очередь), отключённое поле остаётся тёмным." -ForegroundColor Green
+
 # 24. Проверка защиты от Pipe Buffer Deadlock и завершения дерева процессов
 $guiCheckCode = Get-Content -Path $guiPs1 -Raw -Encoding utf8
 if (-not $guiCheckCode.Contains('ReadToEndAsync()')) {
