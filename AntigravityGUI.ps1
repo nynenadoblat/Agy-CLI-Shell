@@ -5749,6 +5749,34 @@ $global:ParseTranscriptScript = {
     $currentTurn = $null
     $activeTools = [System.Collections.Generic.List[psobject]]::new()
 
+    $finalizeTurn = {
+        param($turn)
+        if (-not $turn) { return }
+        if ($activeTools.Count -gt 0) {
+            $turn.Items.Add([pscustomobject]@{ Type = "TOOLS"; Tools = $activeTools.ToArray() })
+            $activeTools.Clear()
+        }
+        if (-not $turn.ResponseTimeStr) {
+            if ($turn.RecordedTime) {
+                $turn.ResponseTimeStr = $turn.RecordedTime
+            } elseif ($turn.StartTime -and $turn.EndTime) {
+                try {
+                    $diffSec = [math]::Round(($turn.EndTime - $turn.StartTime).TotalSeconds, 1)
+                    if ($diffSec -ge 60) {
+                        $m = [int]($diffSec / 60)
+                        $s = [math]::Round($diffSec % 60, 1)
+                        $turn.ResponseTimeStr = "${m} мин ${s} сек"
+                    } elseif ($diffSec -gt 0) {
+                        $turn.ResponseTimeStr = "${diffSec} сек"
+                    } else {
+                        $turn.ResponseTimeStr = "< 1 сек"
+                    }
+                } catch {}
+            }
+        }
+        $turns.Add($turn)
+    }
+
     try {
         $fs = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         try {
@@ -5768,11 +5796,19 @@ $global:ParseTranscriptScript = {
                         $timeStr = if ($step.created_at) {
                             try { [DateTime]::Parse($step.created_at).ToLocalTime().ToString("HH:mm:ss") } catch { "" }
                         } else { "" }
+                        $turnStartTime = if ($step.created_at) {
+                            try { [DateTime]::Parse($step.created_at) } catch { $null }
+                        } else { $null }
                         $currentTurn = [pscustomobject]@{
-                            UserTime   = $timeStr
-                            UserText   = ""
-                            UserBadges = ""
-                            Items      = [System.Collections.Generic.List[psobject]]::new()
+                            UserTime        = $timeStr
+                            StartTime       = $turnStartTime
+                            EndTime         = $null
+                            RecordedTime    = $null
+                            ResponseTimeStr = $null
+                            UserText        = ""
+                            UserBadges      = ""
+                            UserAttachments = @()
+                            Items           = [System.Collections.Generic.List[psobject]]::new()
                         }
                     }
 
@@ -5791,11 +5827,8 @@ $global:ParseTranscriptScript = {
                 }
                 elseif ($step.type -eq "USER_INPUT") {
                     if ($currentTurn) {
-                        if ($activeTools.Count -gt 0) {
-                            $currentTurn.Items.Add([pscustomobject]@{ Type = "TOOLS"; Tools = $activeTools.ToArray() })
-                            $activeTools.Clear()
-                        }
-                        $turns.Add($currentTurn)
+                        & $finalizeTurn $currentTurn
+                        $currentTurn = $null
                     }
 
                     $raw = $step.content
@@ -5849,9 +5882,16 @@ $global:ParseTranscriptScript = {
                     $timeStr = if ($step.created_at) {
                         try { [DateTime]::Parse($step.created_at).ToLocalTime().ToString("HH:mm:ss") } catch { "" }
                     } else { "" }
+                    $turnStartTime = if ($step.created_at) {
+                        try { [DateTime]::Parse($step.created_at) } catch { $null }
+                    } else { $null }
 
                     $currentTurn = [pscustomobject]@{
                         UserTime        = $timeStr
+                        StartTime       = $turnStartTime
+                        EndTime         = $null
+                        RecordedTime    = $null
+                        ResponseTimeStr = $null
                         UserText        = $cleanText
                         UserBadges      = $badges
                         UserAttachments = $turnAttachments.ToArray()
@@ -5872,11 +5912,18 @@ $global:ParseTranscriptScript = {
                     if (-not $currentTurn) {
                         $currentTurn = [pscustomobject]@{
                             UserTime        = ""
+                            StartTime       = $null
+                            EndTime         = $null
+                            RecordedTime    = $null
+                            ResponseTimeStr = $null
                             UserText        = ""
                             UserBadges      = ""
                             UserAttachments = @()
                             Items           = [System.Collections.Generic.List[psobject]]::new()
                         }
+                    }
+                    if ($step.created_at) {
+                        try { $currentTurn.EndTime = [DateTime]::Parse($step.created_at) } catch {}
                     }
                     if ($step.tool_calls) {
                         foreach ($tc in $step.tool_calls) {
@@ -5901,6 +5948,9 @@ $global:ParseTranscriptScript = {
                             $currentTurn.Items.Add([pscustomobject]@{ Type = "TOOLS"; Tools = $activeTools.ToArray() })
                             $activeTools.Clear()
                         }
+                        if ($step.content -match '⏱️\s*Время ответа:\s*([^\r\n]+)') {
+                            $currentTurn.RecordedTime = $matches[1].Trim()
+                        }
                         $cleanContent = [regex]::Replace($step.content, '(?m)^\s*⏱️\s*Время ответа:\s*[^\r\n]*\r?\n?', '').TrimEnd()
                         if ($cleanContent) {
                             $currentTurn.Items.Add([pscustomobject]@{ Type = "AGENT_TEXT"; Text = $cleanContent })
@@ -5915,11 +5965,8 @@ $global:ParseTranscriptScript = {
 } catch {}
 
     if ($currentTurn) {
-        if ($activeTools.Count -gt 0) {
-            $currentTurn.Items.Add([pscustomobject]@{ Type = "TOOLS"; Tools = $activeTools.ToArray() })
-            $activeTools.Clear()
-        }
-        $turns.Add($currentTurn)
+        & $finalizeTurn $currentTurn
+        $currentTurn = $null
     }
 
     return $turns
@@ -6101,9 +6148,13 @@ function Populate-ConversationTranscriptToLog {
                 }
 
                 Write-PerfLog "  ход: вывод $($consolidated.Count) блоков занял $($turnSw.ElapsedMilliseconds) мс"
-                # 3. Разделительный перенос строки после ответа агента (как в live-чате)
+                # 3. Разделительный перенос строки и время ответа агента (как в live-чате)
                 if ($agentHeaderAdded) {
-                    Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $doc
+                    if ($turn.ResponseTimeStr) {
+                        Append-ChatFormatted -Text "`r`n⏱️ Время ответа: $($turn.ResponseTimeStr)`r`n`r`n" -Color "#888888" -Document $doc
+                    } else {
+                        Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $doc
+                    }
                 }
             }
         }
