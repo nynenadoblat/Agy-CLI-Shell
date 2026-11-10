@@ -536,7 +536,7 @@ if (-not (Test-Path $defaultAgyPath)) {
                     <Border x:Name="BorderLimitsWidget"
                             Background="#1C1F26" BorderBrush="#2D333B" BorderThickness="1"
                             CornerRadius="5" Padding="7,3" Cursor="Hand" VerticalAlignment="Center"
-                            ToolTip="Суточные лимиты использования (RPD, RPM, квоты токенов). Нажмите для дашборда квот.">
+                            ToolTip="Суточные лимиты использования (RPD, RPM, квоты токенов). Нажмите для дашборда квот или нажмите [F5] для обновления.">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="⚡" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
                             
@@ -3741,7 +3741,7 @@ function Show-WelcomeMessage($Document = $null) {
     Append-ChatFormatted -Text "  ⚡ Antigravity Agent Shell v1.0`r`n" -Color "#4FC1FF" -Bold -Document $Document
     Append-ChatFormatted -Text "  Исполняемый файл: $defaultAgyPath`r`n" -Color "#888888" -Document $Document
     Append-ChatFormatted -Text "  Нажмите [Enter] для отправки, [Shift+Enter] для новой строки.`r`n" -Color "#888888" -Document $Document
-    Append-ChatFormatted -Text "  Вкладки диалогов: [➕] или [Ctrl+T] — новая, [Ctrl+W] — закрыть, [Ctrl+Tab] — переключение.`r`n" -Color "#888888" -Document $Document
+    Append-ChatFormatted -Text "  Вкладки диалогов: [➕] или [Ctrl+T] — новая, [Ctrl+W] — закрыть, [Ctrl+Tab] — переключение, [F5] — обновление лимитов.`r`n" -Color "#888888" -Document $Document
     Append-ChatFormatted -Text "================================================================================`r`n`r`n" -Color "#3E3E42" -Document $Document
 }
 Show-WelcomeMessage
@@ -4598,11 +4598,13 @@ function Start-AsyncQuotaSync {
         return $global:ActiveQuotaSyncJob
     }
 
+    $agyBin = if ($defaultAgyPath -and (Test-Path $defaultAgyPath)) { $defaultAgyPath } else { "agy.exe" }
     $ps = [powershell]::Create()
     [void]$ps.AddScript({
+        param($binPath)
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = "agy.exe"
+            $psi.FileName = if ($binPath -and (Test-Path $binPath)) { $binPath } else { "agy.exe" }
             $psi.Arguments = "-p `"/usage`" --output-format json"
             $psi.UseShellExecute = $false
             $psi.RedirectStandardOutput = $true
@@ -4618,7 +4620,7 @@ function Start-AsyncQuotaSync {
         } catch {
             return $null
         }
-    })
+    }).AddArgument($agyBin)
 
     $asyncResult = $ps.BeginInvoke()
     $callbacks = New-Object System.Collections.ArrayList
@@ -4975,13 +4977,14 @@ function Get-DailyUsageStats {
         IsApiBlocked           = $isApiBlocked
         LiveGemini             = $(if ($live) { $live.gemini } else { $null })
         LiveClaudeGpt          = $(if ($live) { $live.claude_gpt } else { $null })
-        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`n• Автообновление: каждые 5 мин`nНажмите для открытия подробного дашборда квот."
+        ToolTipText            = "⚡ Квоты Google AI Pro ($($quota.DisplayName)):`n• Группа: $grpDisplayName`n• Недельный лимит: $(if ($isApiBlocked) { '0.00% (Исчерпан)' } else { "$weeklyPct% (в норме)" })`n• 5-часовой лимит: $fiveHourText`n• Сброс недели: через $resetCountdownVal`n• [F5] — принудительное обновление лимитов`n• Автообновление: каждые 5 мин`nНажмите для открытия подробного дашборда квот."
     }
 }
 
 function Update-LimitsDisplay {
     param(
-        [string]$modelName = $null
+        [string]$modelName = $null,
+        [switch]$ForceRefresh
     )
     if (-not $txtLimitsSummary -and -not $prgLimits) { return }
 
@@ -4990,7 +4993,7 @@ function Update-LimitsDisplay {
     }
     if (-not $modelName) { $modelName = "gemini-3.8-flash-high" }
 
-    $stats = Get-DailyUsageStats -modelName $modelName
+    $stats = Get-DailyUsageStats -modelName $modelName -ForceRefresh:$ForceRefresh
 
     # 1. Полоса прогресса недельного остатка квоты
     if ($prgLimits) {
@@ -5032,6 +5035,49 @@ function Update-LimitsDisplay {
             if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50") }
         }
     }
+}
+
+function Request-ManualQuotaRefresh {
+    if ($global:ActiveQuotaSyncJob -and $global:ActiveQuotaSyncJob.AsyncResult -and -not $global:ActiveQuotaSyncJob.AsyncResult.IsCompleted) {
+        if ($txtStatus) {
+            $txtStatus.Text = "⏳ Синхронизация лимитов уже выполняется..."
+        }
+        return
+    }
+
+    # Мгновенная визуальная индикация старта обновления
+    if ($txtLimitsSummary) {
+        $txtLimitsSummary.Text = "Синхронизация..."
+    }
+    if ($borderLimitsBadge) {
+        $borderLimitsBadge.Background = (Get-CachedBrush "#3B2E1E")
+        $borderLimitsBadge.BorderBrush = (Get-CachedBrush "#FFA500")
+    }
+    if ($txtLimitsPercent) {
+        $txtLimitsPercent.Text = "..."
+        $txtLimitsPercent.Foreground = (Get-CachedBrush "#FFA500")
+    }
+    if ($statusDot) {
+        $statusDot.Fill = (Get-CachedBrush "#FFA500")
+    }
+    if ($txtStatus) {
+        $txtStatus.Text = "🔄 Принудительное обновление лимитов (F5)..."
+    }
+
+    # Запуск асинхронного неблокирующего опроса agy.exe -p /usage
+    [void](Start-AsyncQuotaSync -OnCompleted {
+        Update-LimitsDisplay -ForceRefresh
+        $curTab = if ($null -ne $global:ActiveTab) { $global:ActiveTab } else { $null }
+        $tabRunning = ($curTab -and $curTab.SyncState -and $curTab.SyncState.IsRunning)
+        if (-not $tabRunning) {
+            if ($txtStatus) {
+                $txtStatus.Text = "✅ Лимиты успешно обновлены"
+            }
+            if ($statusDot) {
+                $statusDot.Fill = (Get-CachedBrush "#4CAF50")
+            }
+        }
+    })
 }
 
 function Show-UsageLimitsDialog {
@@ -5391,29 +5437,42 @@ function Show-UsageLimitsDialog {
             })
         }
 
-        # Кнопка ручного обновления: неблокирующая асинхронная синхронизация
+        # Кнопка ручного обновления и хоткей F5: неблокирующая асинхронная синхронизация
         $btnRefresh = $diag.FindName("BtnRefreshUsageStats")
-        if ($btnRefresh) {
-            $btnRefresh.Add_Click({
-                $dlgOverlay = $diag.FindName("DlgLoadingOverlay")
-                if ($dlgOverlay) { $dlgOverlay.Visibility = [System.Windows.Visibility]::Visible }
+        $doDialogRefresh = {
+            if ($btnRefresh -and -not $btnRefresh.IsEnabled) { return }
+            $dlgOverlay = $diag.FindName("DlgLoadingOverlay")
+            if ($dlgOverlay) { $dlgOverlay.Visibility = [System.Windows.Visibility]::Visible }
+            if ($btnRefresh) {
                 $btnRefresh.IsEnabled = $false
                 $btnRefresh.Content = "⏳ Запрос..."
+            }
 
-                $banner = $diag.FindName("DlgSyncBanner")
-                if ($banner) { $banner.Visibility = [System.Windows.Visibility]::Visible }
-                $tSync = $diag.FindName("TxtDlgSyncStatus")
-                if ($tSync) { $tSync.Text = "Запрос актуальных квот API у Google AI Pro..." }
-                $pSync = $diag.FindName("PrgSyncSpinner")
-                if ($pSync) { $pSync.Visibility = [System.Windows.Visibility]::Visible }
+            $banner = $diag.FindName("DlgSyncBanner")
+            if ($banner) { $banner.Visibility = [System.Windows.Visibility]::Visible }
+            $tSync = $diag.FindName("TxtDlgSyncStatus")
+            if ($tSync) { $tSync.Text = "Запрос актуальных квот API у Google AI Pro..." }
+            $pSync = $diag.FindName("PrgSyncSpinner")
+            if ($pSync) { $pSync.Visibility = [System.Windows.Visibility]::Visible }
 
-                Start-AsyncQuotaSync -OnCompleted {
-                    & $applyFreshStats
+            Start-AsyncQuotaSync -OnCompleted {
+                & $applyFreshStats
+                if ($btnRefresh) {
                     $btnRefresh.IsEnabled = $true
                     $btnRefresh.Content = "✔️ Обновлено"
                 }
-            })
+            }
         }
+        if ($btnRefresh) {
+            $btnRefresh.Add_Click($doDialogRefresh)
+        }
+        $diag.Add_PreviewKeyDown({
+            param($s, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::F5) {
+                $e.Handled = $true
+                & $doDialogRefresh
+            }
+        })
 
         # Фоновый опрос при открытии, если кэш старше 90 секунд
         $diag.Add_Loaded({
@@ -8828,9 +8887,15 @@ $btnNewTab.Add_Click({
     Add-NewTab -Select
 })
 
-# Горячие клавиши масштабирования, буфера обмена и управления вкладками: Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+V, Ctrl+Plus/Minus/0
+# Горячие клавиши масштабирования, буфера обмена, лимитов и управления вкладками: F5, Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+V, Ctrl+Plus/Minus/0
 $window.Add_PreviewKeyDown({
     param($sender, $e)
+    # Принудительное обновление лимитов по F5
+    if ($e.Key -eq [System.Windows.Input.Key]::F5) {
+        $e.Handled = $true
+        Request-ManualQuotaRefresh
+        return
+    }
     if ([System.Windows.Input.Keyboard]::Modifiers.HasFlag([System.Windows.Input.ModifierKeys]::Control)) {
         if ($e.Key -eq [System.Windows.Input.Key]::T) {
             $e.Handled = $true
