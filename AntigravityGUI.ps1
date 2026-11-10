@@ -5797,7 +5797,10 @@ $global:ParseTranscriptScript = {
                             $currentTurn.Items.Add([pscustomobject]@{ Type = "TOOLS"; Tools = $activeTools.ToArray() })
                             $activeTools.Clear()
                         }
-                        $currentTurn.Items.Add([pscustomobject]@{ Type = "AGENT_TEXT"; Text = $step.content })
+                        $cleanContent = [regex]::Replace($step.content, '(?m)^\s*⏱️\s*Время ответа:\s*[^\r\n]*\r?\n?', '').TrimEnd()
+                        if ($cleanContent) {
+                            $currentTurn.Items.Add([pscustomobject]@{ Type = "AGENT_TEXT"; Text = $cleanContent })
+                        }
                     }
                 }
             } catch {}
@@ -7065,7 +7068,10 @@ function Finalize-TabStreamingBuffer($Tab) {
             [void]$Tab.StreamBuffer.Clear()
         }
         if (-not [string]::IsNullOrEmpty($streamedText)) {
-            Append-MarkdownFormatted -Text $streamedText -Document $Tab.Document -BaseColor "#D4D4D4"
+            $cleanStreamed = [regex]::Replace($streamedText, '(?m)^\s*⏱️\s*Время ответа:\s*[^\r\n]*\r?\n?', '').TrimEnd()
+            if (-not [string]::IsNullOrEmpty($cleanStreamed)) {
+                Append-MarkdownFormatted -Text $cleanStreamed -Document $Tab.Document -BaseColor "#D4D4D4"
+            }
             # Принудительно обновляем layout и прокручиваем вниз после финального рендера Markdown.
             # Без этого WPF батчит обновления визуального дерева и ответ остаётся невидим
             # до следующего layout-цикла (или до перезапуска лаунчера).
@@ -7747,7 +7753,6 @@ $uiTimer.Add_Tick({
                 }
                 "done" {
                     Finalize-ActiveToolGroup -Tab $t
-                    Finalize-TabStreamingBuffer -Tab $t
                     $elapsedTotal = if ($t.SyncState.Stopwatch) {
                         $t.SyncState.Stopwatch.Stop()
                         $t.SyncState.Stopwatch.Elapsed
@@ -7770,7 +7775,21 @@ $uiTimer.Add_Tick({
                     if ($t.HeaderDot) {
                         $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50")
                     }
-                    Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $t.Document
+
+                    Finalize-TabStreamingBuffer -Tab $t
+
+                    if ($null -ne $doneSec) {
+                        $realTimeStr = if ($doneSec -ge 60) {
+                            $m = [int]($doneSec / 60)
+                            $s = [math]::Round($doneSec % 60, 1)
+                            "${m} мин ${s} сек"
+                        } else {
+                            "${doneSec} сек"
+                        }
+                        Append-ChatFormatted -Text "`r`n⏱️ Время ответа: $realTimeStr`r`n`r`n" -Color "#888888" -Document $t.Document
+                    } else {
+                        Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $t.Document
+                    }
                     if ($t.ConversationId) {
                         Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
                         Update-LimitsDisplay -modelName $t.Model
