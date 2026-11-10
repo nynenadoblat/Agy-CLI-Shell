@@ -538,7 +538,23 @@ if (-not (Test-Path $defaultAgyPath)) {
                             CornerRadius="5" Padding="7,3" Cursor="Hand" VerticalAlignment="Center"
                             ToolTip="Суточные лимиты использования (RPD, RPM, квоты токенов). Нажмите для дашборда квот или нажмите [F5] для обновления.">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="⚡" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <!-- Иконка молнии (в обычном режиме) -->
+                            <TextBlock x:Name="TxtLimitsIcon" Text="⚡" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+
+                            <!-- Векторный анимированный спиннер обновления лимитов (виден при синхронизации) -->
+                            <Viewbox x:Name="SpinnerLimits" Width="12" Height="12" Margin="0,0,5,0" VerticalAlignment="Center" Visibility="Collapsed">
+                                <Canvas Width="24" Height="24">
+                                    <Ellipse Width="20" Height="20" Canvas.Left="2" Canvas.Top="2"
+                                             Stroke="#2D3545" StrokeThickness="3"/>
+                                    <Path Canvas.Left="2" Canvas.Top="2"
+                                          Stroke="#58A6FF" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Data="M 10 0 A 10 10 0 0 1 20 10">
+                                        <Path.RenderTransform>
+                                            <RotateTransform x:Name="SpinnerLimitsRotate" Angle="0" CenterX="10" CenterY="10"/>
+                                        </Path.RenderTransform>
+                                    </Path>
+                                </Canvas>
+                            </Viewbox>
                             
                             <!-- Графическая полоса прогресса лимитов -->
                             <ProgressBar x:Name="PrgLimits" Template="{StaticResource LimitsProgressBarTemplate}"
@@ -627,6 +643,9 @@ $txtContextTokens       = $window.FindName("TxtContextTokens")
 $borderContextBadge     = $window.FindName("BorderContextBadge")
 $txtContextPercent      = $window.FindName("TxtContextPercent")
 $borderLimitsWidget     = $window.FindName("BorderLimitsWidget")
+$txtLimitsIcon          = $window.FindName("TxtLimitsIcon")
+$spinnerLimits          = $window.FindName("SpinnerLimits")
+$spinnerLimitsRotate    = $window.FindName("SpinnerLimitsRotate")
 $prgLimits              = $window.FindName("PrgLimits")
 $txtLimitsSummary       = $window.FindName("TxtLimitsSummary")
 $borderLimitsBadge      = $window.FindName("BorderLimitsBadge")
@@ -650,6 +669,15 @@ if ($spinnerRotate) {
         $spinnerAnim = [System.Windows.Media.Animation.DoubleAnimation]::new(0.0, 360.0, [System.Windows.Duration]::new([TimeSpan]::FromSeconds(1.0)))
         $spinnerAnim.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
         $spinnerRotate.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $spinnerAnim)
+    } catch {}
+}
+
+# Запуск аппаратной плавной анимации вращения спиннера обновления лимитов (60 FPS)
+if ($spinnerLimitsRotate) {
+    try {
+        $limitsSpinnerAnim = [System.Windows.Media.Animation.DoubleAnimation]::new(0.0, 360.0, [System.Windows.Duration]::new([TimeSpan]::FromSeconds(0.85)))
+        $limitsSpinnerAnim.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+        $spinnerLimitsRotate.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $limitsSpinnerAnim)
     } catch {}
 }
 
@@ -4587,6 +4615,19 @@ function Update-QuotaCacheFromJson {
 
 $global:ActiveQuotaSyncJob = $null
 
+function Set-LimitsSyncState {
+    param([bool]$IsSyncing)
+    if ($spinnerLimits) {
+        $spinnerLimits.Visibility = if ($IsSyncing) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+    }
+    if ($txtLimitsIcon) {
+        $txtLimitsIcon.Visibility = if ($IsSyncing) { [System.Windows.Visibility]::Collapsed } else { [System.Windows.Visibility]::Visible }
+    }
+    if ($borderLimitsWidget) {
+        $borderLimitsWidget.BorderBrush = if ($IsSyncing) { (Get-CachedBrush "#388BFD") } else { (Get-CachedBrush "#2D333B") }
+    }
+}
+
 function Start-AsyncQuotaSync {
     param(
         [scriptblock]$OnCompleted
@@ -4597,6 +4638,8 @@ function Start-AsyncQuotaSync {
         }
         return $global:ActiveQuotaSyncJob
     }
+
+    Set-LimitsSyncState $true
 
     $agyBin = if ($defaultAgyPath -and (Test-Path $defaultAgyPath)) { $defaultAgyPath } else { "agy.exe" }
     $ps = [powershell]::Create()
@@ -4644,6 +4687,7 @@ function Start-AsyncQuotaSync {
 
         if ($isDone -or $isTimeout) {
             $timer.Stop()
+            Set-LimitsSyncState $false
             $rawOut = $null
             if ($isDone) {
                 try {
@@ -5045,9 +5089,10 @@ function Request-ManualQuotaRefresh {
         return
     }
 
-    # Мгновенная визуальная индикация старта обновления
+    # Мгновенная визуальная индикация старта обновления (активный лоадер-спиннер и статус)
+    Set-LimitsSyncState $true
     if ($txtLimitsSummary) {
-        $txtLimitsSummary.Text = "Синхронизация..."
+        $txtLimitsSummary.Text = "Обновление..."
     }
     if ($borderLimitsBadge) {
         $borderLimitsBadge.Background = (Get-CachedBrush "#3B2E1E")
