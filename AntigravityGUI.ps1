@@ -262,17 +262,14 @@ if (-not (Test-Path $defaultAgyPath)) {
                     <ComboBox x:Name="CmbProjects" Grid.Column="3" ToolTip="Быстрый выбор проекта из корневой папки проектов"/>
                 </Grid>
 
-                <!-- Строка 2: Настройки модели, режима и параметров мышления -->
+                <!-- Строка 2: Настройки модели, режима и параметров -->
                 <Grid Grid.Row="2">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="180"/>
+                        <ColumnDefinition Width="200"/>
                         <ColumnDefinition Width="14"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="110"/>
-                        <ColumnDefinition Width="14"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="90"/>
                         <ColumnDefinition Width="16"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
@@ -285,12 +282,8 @@ if (-not (Test-Path $defaultAgyPath)) {
                     <TextBlock Grid.Column="3" Text="Режим:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <ComboBox x:Name="CmbMode" Grid.Column="4" VerticalAlignment="Center"/>
 
-                    <!-- Effort -->
-                    <TextBlock Grid.Column="6" Text="Рассуждение:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="CmbEffort" Grid.Column="7" VerticalAlignment="Center"/>
-
                     <!-- Чекбокс прав -->
-                    <CheckBox x:Name="ChkSkipPerms" Grid.Column="9" Content="Авто-подтверждение (--dangerously-skip-permissions)" IsChecked="True" VerticalAlignment="Center"/>
+                    <CheckBox x:Name="ChkSkipPerms" Grid.Column="6" Content="Авто-подтверждение (--dangerously-skip-permissions)" IsChecked="True" VerticalAlignment="Center"/>
                 </Grid>
 
                 <!-- Строка 3: Разговоры и управление сессией -->
@@ -355,6 +348,19 @@ if (-not (Test-Path $defaultAgyPath)) {
                     <FlowDocument PagePadding="0" LineHeight="22" LineStackingStrategy="BlockLineHeight"/>
                 </RichTextBox>
 
+                <!-- ВСПЛЫВАЮЩЕЕ МЕНЮ ВЫДЕЛЕНИЯ ТЕКСТА (ЧЕРЕЗ 0.5 СЕК) -->
+                <Popup x:Name="PopSelectionMenu" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade" Placement="MousePoint">
+                    <Border Background="#252528" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="4">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#000000" BlurRadius="10" ShadowDepth="2" Opacity="0.5"/>
+                        </Border.Effect>
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="BtnSelectionReply" Content="💬 Ответить" Padding="8,4" Background="#1E2638" BorderBrush="#2D4373" Foreground="#58A6FF" FontWeight="SemiBold" FontSize="11" Margin="0,0,4,0" Cursor="Hand"/>
+                            <Button x:Name="BtnSelectionCopy" Content="📋 Копировать" Padding="8,4" Background="#252526" BorderBrush="#3E3E42" Foreground="#D4D4D4" FontSize="11" Cursor="Hand"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+
                 <!-- ОВЕРЛЕЙ АНИМАЦИИ ЗАГРУЗКИ ДИАЛОГА -->
                 <Grid x:Name="LoadingOverlay" Visibility="Collapsed" Background="#D918181A">
                     <Border HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -416,23 +422,32 @@ if (-not (Test-Path $defaultAgyPath)) {
                     <ColumnDefinition Width="130"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Поле ввода промпта -->
-                <TextBox x:Name="TxtPromptInput"
-                         Grid.Column="0"
-                         Height="85"
-                         Background="#252526"
-                         Foreground="#FFFFFF"
-                         BorderBrush="#3E3E42"
-                         BorderThickness="1"
-                         Padding="8"
-                         FontFamily="Segoe UI"
-                         FontSize="13"
-                         AcceptsReturn="False"
-                         TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto"
-                         AllowDrop="True"
-                         Margin="0,0,8,0"
-                         ToolTip="Введите запрос к агенту. Нажмите Enter для отправки, Shift+Enter для новой строки. Нажмите Ctrl+V для вставки скриншота из буфера или перетащите картинку."/>
+                <!-- Поле ввода промпта и плашка ответа на цитату -->
+                <DockPanel Grid.Column="0" Margin="0,0,8,0">
+                    <!-- Панель цитирования / ответа на сообщение -->
+                    <Border x:Name="BorderQuoteReply" DockPanel.Dock="Top" Background="#1E2638" BorderBrush="#2D4373" BorderThickness="1,1,1,0" CornerRadius="6,6,0,0" Padding="8,5" Visibility="Collapsed">
+                        <DockPanel LastChildFill="True">
+                            <Button x:Name="BtnCancelQuoteReply" DockPanel.Dock="Right" Content="✕" Width="22" Height="22" FontSize="11" Background="Transparent" BorderThickness="0" Foreground="#8B949E" Cursor="Hand" ToolTip="Отменить цитирование (Esc)"/>
+                            <TextBlock DockPanel.Dock="Left" Text="💬 В ответ на:" Foreground="#58A6FF" FontWeight="SemiBold" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="TxtQuotePreview" Foreground="#C9D1D9" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontFamily="Consolas, Segoe UI"/>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Поле ввода промпта -->
+                    <TextBox x:Name="TxtPromptInput"
+                             Height="85"
+                             Background="#252526"
+                             Foreground="#FFFFFF"
+                             BorderBrush="#3E3E42"
+                             BorderThickness="1"
+                             Padding="8"
+                             FontFamily="Segoe UI"
+                             FontSize="13"
+                             AcceptsReturn="False"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             AllowDrop="True"/>
+                </DockPanel>
 
                 <!-- Кнопки отправки, вложения и остановки -->
                 <Grid Grid.Column="1">
@@ -562,8 +577,8 @@ if (-not (Test-Path $defaultAgyPath)) {
                                          Background="#14161C" BorderBrush="#252A34" BorderThickness="1"
                                          Foreground="#4EC9B0" Margin="0,0,6,0" VerticalAlignment="Center"/>
 
-                            <!-- Числовой текст: 23 / 1.5k -->
-                            <TextBlock x:Name="TxtLimitsSummary" Text="0 / 1.5k" FontSize="11" Foreground="#CCCCCC" FontFamily="Consolas, Segoe UI" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <!-- Текст времени сброса лимита -->
+                            <TextBlock x:Name="TxtLimitsSummary" Text="Сброс: --" FontSize="11" Foreground="#CCCCCC" FontFamily="Consolas, Segoe UI" Margin="0,0,6,0" VerticalAlignment="Center"/>
 
                             <!-- Графический бейдж с остатком квоты -->
                             <Border x:Name="BorderLimitsBadge" Background="#1B2F2B" BorderBrush="#244B3F" BorderThickness="1" CornerRadius="3" Padding="4,0" VerticalAlignment="Center">
@@ -620,7 +635,6 @@ $btnBrowseWorkspace     = $window.FindName("BtnBrowseWorkspace")
 $cmbProjects            = $window.FindName("CmbProjects")
 $cmbModel               = $window.FindName("CmbModel")
 $cmbMode                = $window.FindName("CmbMode")
-$cmbEffort              = $window.FindName("CmbEffort")
 $chkSkipPerms           = $window.FindName("ChkSkipPerms")
 $cmbConversations       = $window.FindName("CmbConversations")
 $btnManageConversations = $window.FindName("BtnManageConversations")
@@ -632,6 +646,12 @@ $btnNewTab              = $window.FindName("BtnNewTab")
 $scrollTabs             = $window.FindName("ScrollTabs")
 $pnlTabsHeader          = $window.FindName("PnlTabsHeader")
 $txtChatLog             = $window.FindName("TxtChatLog")
+$popSelectionMenu       = $window.FindName("PopSelectionMenu")
+$btnSelectionReply      = $window.FindName("BtnSelectionReply")
+$btnSelectionCopy       = $window.FindName("BtnSelectionCopy")
+$borderQuoteReply       = $window.FindName("BorderQuoteReply")
+$btnCancelQuoteReply    = $window.FindName("BtnCancelQuoteReply")
+$txtQuotePreview        = $window.FindName("TxtQuotePreview")
 $txtPromptInput         = $window.FindName("TxtPromptInput")
 $btnSend                = $window.FindName("BtnSend")
 $btnStop                = $window.FindName("BtnStop")
@@ -2309,7 +2329,6 @@ function Save-LauncherConfig {
                 if ($txtWorkspace) { $global:ActiveTab.Workspace = $txtWorkspace.Text }
                 if ($cmbModel -and $cmbModel.SelectedItem) { $global:ActiveTab.Model = $cmbModel.SelectedItem.ToString() }
                 if ($cmbMode -and $cmbMode.SelectedItem) { $global:ActiveTab.Mode = $cmbMode.SelectedItem.ToString() }
-                if ($cmbEffort -and $cmbEffort.SelectedItem) { $global:ActiveTab.Effort = $cmbEffort.SelectedItem.ToString() }
                 if ($chkSkipPerms) { $global:ActiveTab.SkipPerms = [bool]$chkSkipPerms.IsChecked }
             }
 
@@ -2471,11 +2490,6 @@ $cmbModel.SelectedItem = "gemini-3.8-flash-high"
 $availableModes = @("auto", "plan", "accept-edits")
 foreach ($md in $availableModes) { [void]$cmbMode.Items.Add($md) }
 $cmbMode.SelectedItem = "auto"
-
-# Уровни рассуждений
-$availableEfforts = @("auto", "high", "medium", "low")
-foreach ($ef in $availableEfforts) { [void]$cmbEffort.Items.Add($ef) }
-$cmbEffort.SelectedItem = "auto"
 
 # Поиск поддиректорий проектов
 function Refresh-ProjectList {
@@ -3083,7 +3097,8 @@ function Append-UserMessageToLog {
         [object]$Badges = "",
         $Attachments = $null,
         $Document = $null,
-        [switch]$IsQueued
+        [switch]$IsQueued,
+        [string]$QuotedText = $null
     )
     $doc = if ($Document) { $Document } elseif ($txtChatLog) { $txtChatLog.Document } else { $null }
     if (-not $doc) { return }
@@ -3095,7 +3110,54 @@ function Append-UserMessageToLog {
     $effFontSize = if ($global:CurrentFontSize -and $global:CurrentFontSize -gt 0) { [double]$global:CurrentFontSize } else { 13.0 }
     $calcLineHeight = [math]::Round([math]::Max(20.0, $effFontSize * 1.55))
 
-    $lines = $cleanText -split "\r?\n"
+    # Распознавание цитаты из параметра или из сохраненного в транскрипте текста
+    $actualQuote = $QuotedText
+    $actualText = $cleanText
+    if (-not $actualQuote -and $cleanText -match '^(?:>\s*)?\[Ответ на цитату\]:\s*\r?\n((?:>\s*.*(?:\r?\n|$))+)([\s\S]*)$') {
+        $rawQuoteLines = $Matches[1] -split "\r?\n"
+        $parsedQuote = ($rawQuoteLines | ForEach-Object { $_ -replace '^>\s?', '' }) -join "`r`n"
+        $actualQuote = $parsedQuote.Trim()
+        $actualText = $Matches[2].Trim()
+    }
+
+    # Визуальный графический блок цитаты над сообщением
+    if (-not [string]::IsNullOrWhiteSpace($actualQuote)) {
+        $quoteBorder = [System.Windows.Controls.Border]::new()
+        $quoteBorder.Background = (Get-CachedBrush "#1C2333")
+        $quoteBorder.BorderBrush = (Get-CachedBrush "#388BFD")
+        $quoteBorder.BorderThickness = [System.Windows.Thickness]::new(3, 0, 0, 0)
+        $quoteBorder.CornerRadius = [System.Windows.CornerRadius]::new(0, 4, 4, 0)
+        $quoteBorder.Padding = [System.Windows.Thickness]::new(8, 4, 8, 4)
+        $quoteBorder.Margin = [System.Windows.Thickness]::new(0, 4, 0, 2)
+        $quoteBorder.ToolTip = $actualQuote
+
+        $quoteSp = [System.Windows.Controls.StackPanel]::new()
+        $quoteTitle = [System.Windows.Controls.TextBlock]::new()
+        $quoteTitle.Text = "💬 В ответ на:"
+        $quoteTitle.Foreground = (Get-CachedBrush "#58A6FF")
+        $quoteTitle.FontSize = [math]::Max(10.0, $effFontSize - 2.0)
+        $quoteTitle.FontWeight = [System.Windows.FontWeights]::SemiBold
+        [void]$quoteSp.Children.Add($quoteTitle)
+
+        $quoteBody = [System.Windows.Controls.TextBlock]::new()
+        $cleanQuoteSnippet = ($actualQuote -replace '[\r\n]+', ' ').Trim()
+        if ($cleanQuoteSnippet.Length -gt 160) {
+            $cleanQuoteSnippet = $cleanQuoteSnippet.Substring(0, 160) + "..."
+        }
+        $quoteBody.Text = $cleanQuoteSnippet
+        $quoteBody.Foreground = (Get-CachedBrush "#8B949E")
+        $quoteBody.FontSize = [math]::Max(11.0, $effFontSize - 1.0)
+        $quoteBody.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+        $quoteBody.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas, Segoe UI")
+        [void]$quoteSp.Children.Add($quoteBody)
+
+        $quoteBorder.Child = $quoteSp
+
+        $quoteUic = [System.Windows.Documents.BlockUIContainer]::new($quoteBorder)
+        $doc.Blocks.Add($quoteUic)
+    }
+
+    $lines = $actualText -split "\r?\n"
     $firstLine = if ($lines.Length -gt 0) { $lines[0] } else { "" }
 
     $p = [System.Windows.Documents.Paragraph]::new()
@@ -3672,6 +3734,7 @@ function Add-ToolStartToGroup([string]$toolName, $Tab = $null) {
     $row.Text = "  ⏳ ⚙️ [$toolName] — выполняется..."
     $row.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E2C08D")
     $row.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+    $row.Tag = [DateTime]::UtcNow
     $g.BodyPanel.Children.Add($row) | Out-Null
 
     $g.PendingItems[$toolName] = $row
@@ -4503,10 +4566,23 @@ function Get-ModelQuotaGroup {
 }
 
 function Format-QuotaCountdown {
-    param([TimeSpan]$diff)
+    param(
+        [TimeSpan]$diff,
+        [switch]$HideMinutes
+    )
     if ($diff.TotalSeconds -le 0) { return "" }
     if ($diff.Days -gt 0) {
+        if ($HideMinutes) {
+            return '{0}д {1}ч' -f $diff.Days, $diff.Hours
+        }
         return '{0}д {1}ч {2}м' -f $diff.Days, $diff.Hours, $diff.Minutes
+    }
+    if ($HideMinutes) {
+        $hrs = [int][math]::Floor($diff.TotalHours)
+        if ($hrs -gt 0) {
+            return '{0}ч' -f $hrs
+        }
+        return '{0}м' -f [int][math]::Max(1, $diff.Minutes)
     }
     return '{0}ч {1}м' -f [int][math]::Floor($diff.TotalHours), $diff.Minutes
 }
@@ -4545,7 +4621,7 @@ function Update-QuotaCacheFromJson {
                     $target = [DateTime]::Parse($weeklyBucket.reset_time).ToUniversalTime()
                     $diff = $target - [DateTime]::UtcNow
                     if ($diff.TotalSeconds -gt 0) {
-                        $wResetsIn = Format-QuotaCountdown $diff
+                        $wResetsIn = Format-QuotaCountdown $diff -HideMinutes
                     }
                 } catch {}
             }
@@ -4782,7 +4858,7 @@ function Load-QuotaCache {
                                     $wTarget = [DateTime]::Parse($grpObj.weekly_reset_time).ToUniversalTime()
                                     $wDiff = $wTarget - [DateTime]::UtcNow
                                     if ($wDiff.TotalSeconds -gt 0) {
-                                        $grpObj.weekly_resets_in = Format-QuotaCountdown $wDiff
+                                        $grpObj.weekly_resets_in = Format-QuotaCountdown $wDiff -HideMinutes
                                     }
                                 } catch {}
                             }
@@ -4889,7 +4965,7 @@ function Get-DailyUsageStats {
                 $target = [DateTime]::Parse($weeklyResetTime).ToUniversalTime()
                 $diff = $target - [DateTime]::UtcNow
                 if ($diff.TotalSeconds -gt 0) {
-                    $weeklyResetsIn = Format-QuotaCountdown $diff
+                    $weeklyResetsIn = Format-QuotaCountdown $diff -HideMinutes
                 }
             } catch {}
         }
@@ -5045,14 +5121,32 @@ function Update-LimitsDisplay {
         $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
     }
 
-    # 2. Текст остатка недели
+    # 2. Текст времени сброса лимита (округление до дней и часов, без минут)
     if ($txtLimitsSummary) {
-        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) { "Неделя: 0.0%" } else { "Неделя: $($stats.WeeklyPercent)%" }
+        $cleanResetsIn = if ($stats.WeeklyResetsIn) {
+            $cleaned = ($stats.WeeklyResetsIn -replace '\s*\d+м', '').Trim()
+            if (-not $cleaned -and $stats.WeeklyResetsIn) { $stats.WeeklyResetsIn } else { $cleaned }
+        } else { "" }
+
+        $txtLimitsSummary.Text = if ($stats.IsApiBlocked) {
+            if ($cleanResetsIn) { "Сброс: $cleanResetsIn" } else { "Лимит исчерпан" }
+        } elseif ($cleanResetsIn) {
+            "Сброс: $cleanResetsIn"
+        } else {
+            "Недельный пул"
+        }
     }
 
     # 3. Бейдж процента доступности
     if ($txtLimitsPercent) {
-        $txtLimitsPercent.Text = if ($stats.IsApiBlocked) { "0%" } else { "$([math]::Round($stats.WeeklyPercent))%" }
+        $pctVal = if ($stats.IsApiBlocked) {
+            "0%"
+        } elseif ($stats.WeeklyPercent -lt 10.0 -and $stats.WeeklyPercent -gt 0.0) {
+            "{0:N1}%" -f $stats.WeeklyPercent
+        } else {
+            "$([math]::Round($stats.WeeklyPercent))%"
+        }
+        $txtLimitsPercent.Text = $pctVal
         $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
     }
     if ($borderLimitsBadge) {
@@ -7012,12 +7106,10 @@ function Show-ConversationSelectorWindow {
             $targetWs = if ($sel.Workspace -and (Test-Path $sel.Workspace)) { $sel.Workspace } else { $txtWorkspace.Text }
             $model = $cmbModel.SelectedItem.ToString()
             $mode = $cmbMode.SelectedItem.ToString()
-            $effort = $cmbEffort.SelectedItem.ToString()
-            $effortArg = if ($effort -ne "auto") { "--effort '$effort'" } else { "" }
             $skip = if ($chkSkipPerms.IsChecked) { "--dangerously-skip-permissions" } else { "" }
             $convArg = "--conversation '$($sel.Id)'"
 
-            $startScript = "Set-Location -LiteralPath '$targetWs'; & '$defaultAgyPath' --model '$model' --mode '$mode' $effortArg $skip $convArg"
+            $startScript = "Set-Location -LiteralPath '$targetWs'; & '$defaultAgyPath' --model '$model' --mode '$mode' $skip $convArg"
             Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $startScript
         }
     })
@@ -7036,6 +7128,42 @@ function Show-ConversationSelectorWindow {
 $global:TabsList = [System.Collections.Generic.List[psobject]]::new()
 $global:ActiveTab = $null
 $global:TabsCounter = 0
+
+# --- Управление активной цитатой (Ответить на сообщение) ---
+function Set-ActiveQuote([string]$QuoteText) {
+    if ([string]::IsNullOrWhiteSpace($QuoteText)) {
+        Clear-ActiveQuote
+        return
+    }
+    $cleanText = ($QuoteText -replace '[\r\n]+', ' ').Trim()
+    $preview = if ($cleanText.Length -gt 90) { $cleanText.Substring(0, 90) + "..." } else { $cleanText }
+    if ($txtQuotePreview) {
+        $txtQuotePreview.Text = "`"$preview`""
+        $txtQuotePreview.ToolTip = $QuoteText.Trim()
+    }
+    if ($borderQuoteReply) {
+        $borderQuoteReply.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($global:ActiveTab) {
+        $global:ActiveTab.QuotedText = $QuoteText.Trim()
+    }
+    if ($txtPromptInput) {
+        $txtPromptInput.Focus() | Out-Null
+    }
+}
+
+function Clear-ActiveQuote {
+    if ($txtQuotePreview) {
+        $txtQuotePreview.Text = ""
+        $txtQuotePreview.ToolTip = $null
+    }
+    if ($borderQuoteReply) {
+        $borderQuoteReply.Visibility = [System.Windows.Visibility]::Collapsed
+    }
+    if ($global:ActiveTab) {
+        $global:ActiveTab.QuotedText = $null
+    }
+}
 
 function New-TabSession {
     param(
@@ -7058,16 +7186,20 @@ function New-TabSession {
     $tabWs = if ($Workspace) { $Workspace } elseif ($txtWorkspace) { $txtWorkspace.Text } else { $defaultWorkspace }
     $tabModel = if ($Model) { $Model } elseif ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-2.5-pro" }
     $tabMode = if ($Mode) { $Mode } elseif ($cmbMode -and $cmbMode.SelectedItem) { $cmbMode.SelectedItem.ToString() } else { "code" }
-    $tabEffort = if ($Effort) { $Effort } elseif ($cmbEffort -and $cmbEffort.SelectedItem) { $cmbEffort.SelectedItem.ToString() } else { "medium" }
+    $tabEffort = if ($Effort) { $Effort } else { "auto" }
     $tabSkipPerms = if ($null -ne $SkipPerms) { $SkipPerms } elseif ($chkSkipPerms) { [bool]$chkSkipPerms.IsChecked } else { $true }
 
     $tabQueue = [System.Collections.Concurrent.ConcurrentQueue[psobject]]::new()
     $tabSync = [hashtable]::Synchronized(@{
-        Queue         = $tabQueue
-        IsRunning     = $false
-        StopRequested = $false
-        ProcessId     = 0
-        Stopwatch     = $null
+        Queue                 = $tabQueue
+        IsRunning             = $false
+        StopRequested         = $false
+        ProcessId             = 0
+        Stopwatch             = $null
+        TurnStartTimeUtc      = [DateTime]::MinValue
+        LastStreamActivityUtc = [DateTime]::MinValue
+        LastDiskActivityUtc   = [DateTime]::MinValue
+        LastTranscriptLength  = 0L
     })
 
     $isLoaded = (-not $Lazy -or [string]::IsNullOrEmpty($ConversationId))
@@ -7083,6 +7215,7 @@ function New-TabSession {
         SkipPerms           = $tabSkipPerms
         Document            = $doc
         PromptText          = ""
+        QuotedText          = $null
         AttachedImages      = [System.Collections.Generic.List[psobject]]::new()
         QueuedUserMessages  = [System.Collections.Generic.List[psobject]]::new()
         ActiveToolGroup     = $null
@@ -7467,7 +7600,6 @@ function Switch-ToTab {
         $prevTab.Workspace = $txtWorkspace.Text
         if ($cmbModel -and $cmbModel.SelectedItem) { $prevTab.Model = $cmbModel.SelectedItem.ToString() }
         if ($cmbMode -and $cmbMode.SelectedItem) { $prevTab.Mode = $cmbMode.SelectedItem.ToString() }
-        if ($cmbEffort -and $cmbEffort.SelectedItem) { $prevTab.Effort = $cmbEffort.SelectedItem.ToString() }
         if ($chkSkipPerms) { $prevTab.SkipPerms = [bool]$chkSkipPerms.IsChecked }
         $prevTab.AttachedImages = [System.Collections.Generic.List[psobject]]::new($global:AttachedImages)
     }
@@ -7484,9 +7616,15 @@ function Switch-ToTab {
     $txtWorkspace.Text = $Tab.Workspace
     if ($cmbModel -and $Tab.Model) { $cmbModel.SelectedItem = $Tab.Model }
     if ($cmbMode -and $Tab.Mode) { $cmbMode.SelectedItem = $Tab.Mode }
-    if ($cmbEffort -and $Tab.Effort) { $cmbEffort.SelectedItem = $Tab.Effort }
     if ($chkSkipPerms) { $chkSkipPerms.IsChecked = $Tab.SkipPerms }
     $txtPromptInput.Text = $Tab.PromptText
+
+    # Восстанавливаем состояние активной цитаты вкладки
+    if ($Tab.QuotedText) {
+        Set-ActiveQuote -QuoteText $Tab.QuotedText
+    } else {
+        Clear-ActiveQuote
+    }
 
     # Восстанавливаем прикрепленные картинки
     $global:AttachedImages.Clear()
@@ -7773,21 +7911,42 @@ $uiTimer.Add_Tick({
             $ds = [math]::Floor($sw.Elapsed.Milliseconds / 100)
             $timeStr = '{0:D2}:{1:D2}.{2}' -f $m, $s, $ds
 
-            # Мониторинг лога транскрипта на наличие предупреждений об ошибках мощностей API (503 No Capacity)
-            if ($tabItem.ConversationId -and (-not $tabItem.LastWarningCheckMs -or (($sw.ElapsedMilliseconds - $tabItem.LastWarningCheckMs) -ge 1200))) {
+            # Обновление живых секунд в строке выполняемого инструмента
+            if ($tabItem.ActiveToolGroup -and $tabItem.ActiveToolGroup.PendingItems -and $tabItem.ActiveToolGroup.PendingItems.Count -gt 0) {
+                foreach ($entry in @($tabItem.ActiveToolGroup.PendingItems.GetEnumerator())) {
+                    $pName = $entry.Key
+                    $pRow = $entry.Value
+                    if ($pRow.Tag -is [DateTime]) {
+                        $pSec = [math]::Floor(([DateTime]::UtcNow - $pRow.Tag).TotalSeconds)
+                        if ($pSec -gt 0) {
+                            $pRow.Text = "  ⏳ ⚙️ [$pName] — выполняется (${pSec}с)..."
+                        }
+                    }
+                }
+            }
+
+            # Мониторинг лога транскрипта на наличие предупреждений об ошибках мощностей API и Watchdog завершения хода
+            if ($tabItem.ConversationId -and (-not $tabItem.LastWarningCheckMs -or (($sw.ElapsedMilliseconds - $tabItem.LastWarningCheckMs) -ge 1000))) {
                 $tabItem.LastWarningCheckMs = $sw.ElapsedMilliseconds
                 $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$($tabItem.ConversationId)\.system_generated\logs\transcript.jsonl"
                 if (Test-Path $tPath) {
                     try {
                         $fi = [System.IO.FileInfo]::new($tPath)
                         if ($fi.Length -gt 0) {
+                            if ($tabItem.SyncState.LastTranscriptLength -ne $fi.Length) {
+                                $tabItem.SyncState.LastTranscriptLength = $fi.Length
+                                $tabItem.SyncState.LastDiskActivityUtc = [DateTime]::UtcNow
+                            }
+
                             $fs = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-                            $readLen = [Math]::Min(2048L, $fs.Length)
+                            $readLen = [Math]::Min(8192L, $fs.Length)
                             $fs.Seek(-$readLen, [System.IO.SeekOrigin]::End) | Out-Null
                             $buf = New-Object byte[] $readLen
                             $fs.Read($buf, 0, [int]$readLen) | Out-Null
                             $fs.Dispose()
                             $tail = [System.Text.Encoding]::UTF8.GetString($buf)
+
+                            # 1. Мониторинг ошибок API (503 / timeout)
                             if ($tail -match '"error":\s*"API error \(attempt (\d+)\): UNAVAILABLE \(code 503\): No capacity available') {
                                 $attemptNum = $Matches[1]
                                 $stopHint = if ([int]$attemptNum -ge 2) { " [Стоп для отмены]" } else { "" }
@@ -7805,6 +7964,58 @@ $uiTimer.Add_Tick({
                                 $tabItem.ApiWarningText = $null
                                 $tabItem.ApiWarningColor = $null
                             }
+
+                            # 2. Disk-Reconciliation Watchdog: детекция завершения хода на диске
+                            $tailLines = $tail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                            $foundDoneStep = $null
+                            for ($li = $tailLines.Count - 1; $li -ge 0; $li--) {
+                                $curLine = $tailLines[$li]
+                                if ($curLine.Contains('"type":"PLANNER_RESPONSE"') -and $curLine.Contains('"status":"DONE"')) {
+                                    try {
+                                        $parsed = ConvertFrom-Json -InputObject $curLine
+                                        if ($parsed.type -eq "PLANNER_RESPONSE" -and $parsed.status -eq "DONE" -and $parsed.content) {
+                                            $foundDoneStep = $parsed
+                                            break
+                                        }
+                                    } catch {}
+                                }
+                            }
+
+                            if ($foundDoneStep -and $tabItem.SyncState.TurnStartTimeUtc -and $tabItem.SyncState.TurnStartTimeUtc -ne [DateTime]::MinValue) {
+                                $stepTimeUtc = $null
+                                if ($foundDoneStep.created_at) {
+                                    try { $stepTimeUtc = [DateTime]::Parse($foundDoneStep.created_at).ToUniversalTime() } catch {}
+                                }
+                                if ($stepTimeUtc -and ($stepTimeUtc -ge $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5))) {
+                                    $idleStreamSec = if ($tabItem.SyncState.LastStreamActivityUtc -and $tabItem.SyncState.LastStreamActivityUtc -ne [DateTime]::MinValue) {
+                                        ([DateTime]::UtcNow - $tabItem.SyncState.LastStreamActivityUtc).TotalSeconds
+                                    } else { 999 }
+
+                                    # Если на диске ход завершен, а поток CLI молчит >= 2.5 сек (зависшие дочерние дескрипторы)
+                                    if ($idleStreamSec -ge 2.5) {
+                                        if ($tabItem.SyncState.ProcessId -gt 0) {
+                                            Stop-ProcessTree -processId $tabItem.SyncState.ProcessId
+                                        }
+
+                                        Finalize-ActiveToolGroup -Tab $tabItem
+                                        Finalize-TabStreamingBuffer -Tab $tabItem
+
+                                        $finalText = $foundDoneStep.content
+                                        $alreadyPresent = $false
+                                        if ($tabItem.StreamBuffer -and $tabItem.StreamBuffer.Length -gt 0) {
+                                            $sample = if ($finalText.Length -gt 60) { $finalText.Substring(0, 60) } else { $finalText }
+                                            if ($tabItem.StreamBuffer.ToString().Contains($sample)) {
+                                                $alreadyPresent = $true
+                                            }
+                                        }
+                                        if (-not $alreadyPresent) {
+                                            Append-ChatFormatted -Text "`r`n[Antigravity]: $finalText`r`n" -Color "#D4D4D4" -Document $tabItem.Document
+                                        }
+
+                                        $tabItem.SyncState.Queue.Enqueue([pscustomobject]@{ Type = "done" })
+                                    }
+                                }
+                            }
                         }
                     } catch {}
                 }
@@ -7817,10 +8028,26 @@ $uiTimer.Add_Tick({
                     $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.ApiWarningColor)
                 }
             } else {
-                $tabItem.StatusText = "⏳ Агент выполняет задачи... ($timeStr)"
-                $tabItem.StatusColor = "#FFA500"
+                $idleSec = if ($tabItem.SyncState.LastStreamActivityUtc -and $tabItem.SyncState.LastStreamActivityUtc -ne [DateTime]::MinValue) {
+                    [math]::Floor(([DateTime]::UtcNow - $tabItem.SyncState.LastStreamActivityUtc).TotalSeconds)
+                } else { 0 }
+                $diskActive = ($tabItem.SyncState.LastDiskActivityUtc -and $tabItem.SyncState.LastDiskActivityUtc -ne [DateTime]::MinValue -and (([DateTime]::UtcNow - $tabItem.SyncState.LastDiskActivityUtc).TotalSeconds -lt 8))
+
+                if ($idleSec -ge 60 -and -not $diskActive) {
+                    $tabItem.StatusText = "⚠️ Нет активности процесса (${idleSec}с) [Стоп для отмены] ($timeStr)"
+                    $tabItem.StatusColor = "#E2C08D"
+                } elseif ($idleSec -ge 20 -and -not $diskActive) {
+                    $tabItem.StatusText = "⏳ Ожидание ответа агента (пауза ${idleSec}с)... ($timeStr)"
+                    $tabItem.StatusColor = "#FFA500"
+                } elseif ($diskActive -and $idleSec -ge 8) {
+                    $tabItem.StatusText = "⏳ Агент выполняет задачи (активность на диске)... ($timeStr)"
+                    $tabItem.StatusColor = "#FFA500"
+                } else {
+                    $tabItem.StatusText = "⏳ Агент выполняет задачи... ($timeStr)"
+                    $tabItem.StatusColor = "#FFA500"
+                }
                 if ($tabItem.HeaderDot) {
-                    $tabItem.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
+                    $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.StatusColor)
                 }
             }
         }
@@ -7838,6 +8065,7 @@ $uiTimer.Add_Tick({
         while ($t.SyncState.Queue.TryDequeue([ref]$item)) {
             switch ($item.Type) {
                 "token" {
+                    $t.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
                     $t.ApiWarningText = $null
                     $t.ApiWarningColor = $null
                     Finalize-ActiveToolGroup -Tab $t
@@ -7871,10 +8099,12 @@ $uiTimer.Add_Tick({
                     if ($t -eq $global:ActiveTab) { Scroll-ChatLogToEnd }
                 }
                 "tool_start" {
+                    $t.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
                     Finalize-TabStreamingBuffer -Tab $t
                     Add-ToolStartToGroup -toolName $item.Name -Tab $t
                 }
                 "tool_done" {
+                    $t.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
                     Add-ToolDoneToGroup -toolName $item.Name -duration $item.Duration -Tab $t
                 }
                 "conversation_id" {
@@ -8274,12 +8504,10 @@ $btnLaunchTui.Add_Click({
     $workspace = $txtWorkspace.Text
     $model = $cmbModel.SelectedItem.ToString()
     $mode = $cmbMode.SelectedItem.ToString()
-    $effort = $cmbEffort.SelectedItem.ToString()
-    $effortArg = if ($effort -ne "auto") { "--effort '$effort'" } else { "" }
     $skip = if ($chkSkipPerms.IsChecked) { "--dangerously-skip-permissions" } else { "" }
     $convArg = if ($global:CurrentConversationId) { "--conversation '$($global:CurrentConversationId)'" } else { "" }
 
-    $startScript = "Set-Location -LiteralPath '$workspace'; & '$defaultAgyPath' --model '$model' --mode '$mode' $effortArg $skip $convArg"
+    $startScript = "Set-Location -LiteralPath '$workspace'; & '$defaultAgyPath' --model '$model' --mode '$mode' $skip $convArg"
     Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", $startScript
 })
 
@@ -8528,6 +8756,10 @@ function Start-AgentExecutionJob {
     $Tab.SyncState.StopRequested = $false
     $Tab.SyncState.ProcessId = 0
     $Tab.SyncState.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $Tab.SyncState.TurnStartTimeUtc = [DateTime]::UtcNow
+    $Tab.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
+    $Tab.SyncState.LastDiskActivityUtc = [DateTime]::UtcNow
+    $Tab.SyncState.LastTranscriptLength = 0L
     $script:syncState = $Tab.SyncState
 
     $jobData = [hashtable]::Synchronized(@{
@@ -8589,10 +8821,24 @@ function Start-AgentExecutionJob {
             }
 
             $turnFinished = $false
+            $reader = $proc.StandardOutput
 
-            while (-not $proc.HasExited) {
-                $line = $proc.StandardOutput.ReadLine()
+            while (-not $proc.HasExited -or -not $reader.EndOfStream) {
+                if ($st.StopRequested) { break }
+                $readTask = $reader.ReadLineAsync()
+                while (-not $readTask.Wait(400)) {
+                    if ($st.StopRequested) { break }
+                    if ($proc.HasExited) {
+                        # Если процесс agy.exe завершился, даем короткий таймаут на считывание остатков буфера
+                        [void]$readTask.Wait(1200)
+                        break
+                    }
+                }
+                if ($st.StopRequested) { break }
+                if (-not $readTask.IsCompleted) { break }
+                $line = $readTask.Result
                 if ($null -eq $line) { break }
+                $st.LastStreamActivityUtc = [DateTime]::UtcNow
                 if ($line) {
                     try {
                         $evt = $line | ConvertFrom-Json
@@ -8721,9 +8967,9 @@ function Send-AgentPrompt {
         return
     }
 
-    $model  = if ($cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-2.5-pro" }
-    $mode   = if ($cmbMode.SelectedItem) { $cmbMode.SelectedItem.ToString() } else { "code" }
-    $effort = if ($cmbEffort.SelectedItem) { $cmbEffort.SelectedItem.ToString() } else { "medium" }
+    $model  = if ($cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-3.8-flash-high" }
+    $mode   = if ($cmbMode.SelectedItem) { $cmbMode.SelectedItem.ToString() } else { "auto" }
+    $effort = if ($tab.Effort) { $tab.Effort } else { "auto" }
     $skipPerms = [bool]$chkSkipPerms.IsChecked
     $convId = $tab.ConversationId
     $global:LastSentPrompt = $prompt
@@ -8749,9 +8995,17 @@ function Send-AgentPrompt {
     }
     Save-LauncherConfig
 
+    # Извлечение активной цитаты (если есть)
+    $activeQuote = if ($tab.QuotedText) { $tab.QuotedText } else { $null }
+    $effectiveUserPrompt = if ($activeQuote) {
+        "> [Ответ на цитату]:`r`n> " + (($activeQuote.Trim() -split "\r?\n") -join "`r`n> ") + "`r`n`r`n" + $prompt
+    } else {
+        $prompt
+    }
+
     # Формирование полного промпта с путями к файлам, папкам и изображениям
     $attachedCopy = @($global:AttachedImages)
-    $fullAgentPrompt = Build-FullAgentPrompt -Prompt $prompt -Attachments $attachedCopy
+    $fullAgentPrompt = Build-FullAgentPrompt -Prompt $effectiveUserPrompt -Attachments $attachedCopy
 
     $badgeAttachments = [System.Collections.Generic.List[psobject]]::new()
     foreach ($att in $attachedCopy) {
@@ -8787,6 +9041,7 @@ function Send-AgentPrompt {
         $qItem = [pscustomobject]@{
             PromptText       = $prompt
             FullAgentPrompt  = $fullAgentPrompt
+            QuotedText       = $activeQuote
             Attachments      = $attachedCopy
             BadgeAttachments = $badgeAttachments
             Badges           = $imgLogBadges
@@ -8804,7 +9059,8 @@ function Send-AgentPrompt {
 
         # Выводим сообщение в чат с индикатором очереди
         $timeNow = $qItem.TimeStr
-        Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Attachments $badgeAttachments -Document $tab.Document -IsQueued
+        Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Attachments $badgeAttachments -Document $tab.Document -IsQueued -QuotedText $activeQuote
+        Clear-ActiveQuote
 
         if ($global:ActiveTab -eq $tab) {
             $txtPromptInput.Text = ""
@@ -8825,7 +9081,8 @@ function Send-AgentPrompt {
 
     # Обновление UI перед стартом
     $timeNow = (Get-Date).ToString("HH:mm:ss")
-    Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Attachments $badgeAttachments -Document $tab.Document
+    Append-UserMessageToLog -TimeStr $timeNow -Text $prompt -Badges $imgLogBadges -Attachments $badgeAttachments -Document $tab.Document -QuotedText $activeQuote
+    Clear-ActiveQuote
     Append-AgentHeader -Document $tab.Document
 
     if ($global:ActiveTab -eq $tab) {
@@ -8915,6 +9172,15 @@ $txtPromptInput.Add_PreviewKeyDown({
         return
     }
 
+    # Отмена активной цитаты по клавише Escape
+    if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+        if ($borderQuoteReply -and $borderQuoteReply.Visibility -eq [System.Windows.Visibility]::Visible) {
+            Clear-ActiveQuote
+            $e.Handled = $true
+            return
+        }
+    }
+
     # Перехват Ctrl+V для вставки скриншота/картинки в поле ввода
     if ($e.Key -eq [System.Windows.Input.Key]::V -and [System.Windows.Input.Keyboard]::Modifiers.HasFlag([System.Windows.Input.ModifierKeys]::Control)) {
         if (Handle-PasteAction) {
@@ -8923,6 +9189,82 @@ $txtPromptInput.Add_PreviewKeyDown({
         }
     }
 })
+
+# --- Логика контекстного меню выделения текста в чате и цитирования (0.5 сек задержка) ---
+if ($btnSelectionCopy) {
+    $btnSelectionCopy.Add_Click({
+        if ($global:PendingSelectionText) {
+            try { [System.Windows.Clipboard]::SetText($global:PendingSelectionText) } catch {}
+        }
+        if ($popSelectionMenu) { $popSelectionMenu.IsOpen = $false }
+    })
+    $btnSelectionCopy.Add_MouseEnter({ $btnSelectionCopy.Background = (Get-CachedBrush "#333336") })
+    $btnSelectionCopy.Add_MouseLeave({ $btnSelectionCopy.Background = (Get-CachedBrush "#252526") })
+}
+
+if ($btnSelectionReply) {
+    $btnSelectionReply.Add_Click({
+        if ($popSelectionMenu) { $popSelectionMenu.IsOpen = $false }
+        if ($global:PendingSelectionText) {
+            Set-ActiveQuote -QuoteText $global:PendingSelectionText
+        }
+    })
+    $btnSelectionReply.Add_MouseEnter({ $btnSelectionReply.Background = (Get-CachedBrush "#263554") })
+    $btnSelectionReply.Add_MouseLeave({ $btnSelectionReply.Background = (Get-CachedBrush "#1E2638") })
+}
+
+if ($btnCancelQuoteReply) {
+    $btnCancelQuoteReply.Add_Click({
+        Clear-ActiveQuote
+    })
+    $btnCancelQuoteReply.Add_MouseEnter({ $btnCancelQuoteReply.Foreground = (Get-CachedBrush "#F85149") })
+    $btnCancelQuoteReply.Add_MouseLeave({ $btnCancelQuoteReply.Foreground = (Get-CachedBrush "#8B949E") })
+}
+
+# Таймер задержки появления меню при выделении текста (0.5 сек)
+$global:SelectionTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$global:SelectionTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+$global:PendingSelectionText = ""
+
+$global:SelectionTimer.Add_Tick({
+    $global:SelectionTimer.Stop()
+    if ($global:PendingSelectionText -and $global:PendingSelectionText.Length -gt 0) {
+        if ($txtChatLog -and $txtChatLog.Selection -and $txtChatLog.Selection.Text.Trim().Length -gt 0) {
+            if ($popSelectionMenu) {
+                $popSelectionMenu.PlacementTarget = $txtChatLog
+                $popSelectionMenu.Placement = [System.Windows.Controls.Primitives.PlacementMode]::MousePoint
+                $popSelectionMenu.VerticalOffset = -34
+                $popSelectionMenu.HorizontalOffset = 0
+                $popSelectionMenu.IsOpen = $false
+                $popSelectionMenu.IsOpen = $true
+            }
+        }
+    }
+})
+
+if ($txtChatLog) {
+    $txtChatLog.Add_SelectionChanged({
+        if ($global:SelectionTimer) {
+            $global:SelectionTimer.Stop()
+        }
+        $selText = if ($txtChatLog.Selection) { $txtChatLog.Selection.Text } else { "" }
+        if ($selText -and $selText.Trim().Length -gt 0) {
+            $global:PendingSelectionText = $selText.Trim()
+            $global:SelectionTimer.Start()
+        } else {
+            $global:PendingSelectionText = ""
+            if ($popSelectionMenu -and $popSelectionMenu.IsOpen) {
+                $popSelectionMenu.IsOpen = $false
+            }
+        }
+    })
+
+    $txtChatLog.Add_PreviewMouseWheel({
+        if ($popSelectionMenu -and $popSelectionMenu.IsOpen) {
+            $popSelectionMenu.IsOpen = $false
+        }
+    })
+}
 
 # Поддержка Drag and Drop файлов и папок в окно и в поле ввода
 $script:HandleFileDropAction = {
