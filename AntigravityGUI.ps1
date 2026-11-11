@@ -3935,7 +3935,7 @@ function Get-AntigravityConversations {
         $dirs = Get-ChildItem -Path $brainDir -Directory -ErrorAction SilentlyContinue
         foreach ($d in $dirs) {
             $cid = $d.Name
-            $tPath = Join-Path $d.FullName ".system_generated\logs\transcript.jsonl"
+            $tPath = Get-TranscriptPath -conversationId $cid -PreferFull
             $title = "Новый диалог"
             $workspace = ""
             $msgCount = 0
@@ -4044,6 +4044,25 @@ function Format-TokenCount {
     return "$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.#}', $valM))M"
 }
 
+function global:Get-TranscriptPath([string]$conversationId, [switch]$PreferFull = $true) {
+    if ([string]::IsNullOrWhiteSpace($conversationId)) { return $null }
+    $brainDir = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId"
+    $fullPath = Join-Path $brainDir ".system_generated\logs\transcript_full.jsonl"
+    $compactPath = Join-Path $brainDir ".system_generated\logs\transcript.jsonl"
+    $altPath = Join-Path $brainDir "transcript.jsonl"
+
+    if ($PreferFull -and (Test-Path $fullPath)) {
+        try {
+            $fi = [System.IO.FileInfo]::new($fullPath)
+            if ($fi.Length -gt 0) { return $fullPath }
+        } catch {}
+    }
+    if (Test-Path $compactPath) { return $compactPath }
+    if (Test-Path $fullPath) { return $fullPath }
+    if (Test-Path $altPath) { return $altPath }
+    return $compactPath
+}
+
 function Get-ConversationContextStats {
     param(
         [string]$conversationId,
@@ -4074,12 +4093,9 @@ function Get-ConversationContextStats {
         }
     }
 
-    $brainDir = "$env:USERPROFILE\.gemini\antigravity-cli\brain"
-    $transcriptPath = Join-Path $brainDir "$conversationId\.system_generated\logs\transcript.jsonl"
-    if (-not (Test-Path $transcriptPath)) {
-        $altPath = Join-Path $brainDir "$conversationId\transcript.jsonl"
-        if (Test-Path $altPath) { $transcriptPath = $altPath } else {
-            return [pscustomobject]@{
+    $transcriptPath = Get-TranscriptPath -conversationId $conversationId -PreferFull
+    if (-not $transcriptPath -or -not (Test-Path $transcriptPath)) {
+        return [pscustomobject]@{
                 ConversationId = $conversationId
                 TotalTokens    = 0
                 InputTokens    = 0
@@ -4100,7 +4116,6 @@ function Get-ConversationContextStats {
                 ToolTipText    = "Транскрипт пока не содержит записей токенов.`nНажмите на виджет для подробного анализа."
                 Color          = "#4EC9B0"
             }
-        }
     }
 
     try {
@@ -5639,8 +5654,8 @@ function Show-UsageLimitsDialog {
 
 function Get-ConversationPreviewText {
     param([string]$conversationId)
-    $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
-    if (-not (Test-Path $tPath)) { return "История диалога пуста или файл transcript.jsonl не найден." }
+    $tPath = Get-TranscriptPath -conversationId $conversationId -PreferFull
+    if (-not $tPath -or -not (Test-Path $tPath)) { return "История диалога пуста или файл transcript.jsonl не найден." }
 
     $firstUserPrompt = ""
     $lastUserPrompt = ""
@@ -5755,8 +5770,8 @@ function Get-ConversationPreviewText {
 
 function Load-ConversationTranscript {
     param([string]$conversationId)
-    $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
-    if (-not (Test-Path $tPath)) { return $null }
+    $tPath = Get-TranscriptPath -conversationId $conversationId -PreferFull
+    if (-not $tPath -or -not (Test-Path $tPath)) { return $null }
 
     $sb = [System.Text.StringBuilder]::new()
     [void]$sb.AppendLine("================================================================================")
@@ -5802,6 +5817,20 @@ function Load-ConversationTranscript {
 $global:ParseTranscriptScript = {
     param([string]$path)
     if (-not (Test-Path $path)) { return @() }
+
+    # Если передан компактный transcript.jsonl, но рядом доступен полный transcript_full.jsonl — автоматически переключаемся на полный без усечений
+    if ($path -and $path.EndsWith("transcript.jsonl")) {
+        try {
+            $dir = [System.IO.Path]::GetDirectoryName($path)
+            if ($dir) {
+                $fullCandidate = [System.IO.Path]::Combine($dir, "transcript_full.jsonl")
+                if (Test-Path $fullCandidate) {
+                    $fiCandidate = [System.IO.FileInfo]::new($fullCandidate)
+                    if ($fiCandidate.Length -gt 0) { $path = $fullCandidate }
+                }
+            }
+        } catch {}
+    }
 
     function Parse-SystemMessageText([string]$text) {
         $results = [System.Collections.Generic.List[psobject]]::new()
@@ -6269,7 +6298,7 @@ function Start-AsyncTranscriptLoad {
         [Parameter(Mandatory=$true)][string]$conversationId,
         [Parameter(Mandatory=$true)]$Tab
     )
-    $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
+    $tPath = Get-TranscriptPath -conversationId $conversationId -PreferFull
 
     # Р‘РµР·РѕРїР°СЃРЅРѕРµ РѕСЃРІРѕР±РѕР¶РґРµРЅРёРµ РїСЂРµРґС‹РґСѓС‰РµР№ Р·Р°РґР°С‡Рё Р·Р°РіСЂСѓР·РєРё
     if ($Tab.LoadingJob) {
@@ -6404,8 +6433,8 @@ function Render-ConversationTranscriptToLog {
         [string]$conversationId,
         $Document = $null
     )
-    $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$conversationId\.system_generated\logs\transcript.jsonl"
-    if (-not (Test-Path $tPath)) { return $false }
+    $tPath = Get-TranscriptPath -conversationId $conversationId -PreferFull
+    if (-not $tPath -or -not (Test-Path $tPath)) { return $false }
 
     $turns = @(& $global:ParseTranscriptScript $tPath)
     if ($turns.Count -eq 0) {
@@ -7928,8 +7957,8 @@ $uiTimer.Add_Tick({
             # Мониторинг лога транскрипта на наличие предупреждений об ошибках мощностей API и Watchdog завершения хода
             if ($tabItem.ConversationId -and (-not $tabItem.LastWarningCheckMs -or (($sw.ElapsedMilliseconds - $tabItem.LastWarningCheckMs) -ge 1000))) {
                 $tabItem.LastWarningCheckMs = $sw.ElapsedMilliseconds
-                $tPath = "$env:USERPROFILE\.gemini\antigravity-cli\brain\$($tabItem.ConversationId)\.system_generated\logs\transcript.jsonl"
-                if (Test-Path $tPath) {
+                $tPath = Get-TranscriptPath -conversationId $tabItem.ConversationId -PreferFull
+                if ($tPath -and (Test-Path $tPath)) {
                     try {
                         $fi = [System.IO.FileInfo]::new($tPath)
                         if ($fi.Length -gt 0) {
@@ -7993,6 +8022,7 @@ $uiTimer.Add_Tick({
 
                                     # Если на диске ход завершен, а поток CLI молчит >= 2.5 сек (зависшие дочерние дескрипторы)
                                     if ($idleStreamSec -ge 2.5) {
+                                        $tabItem.SyncState.TurnResolvedByWatchdog = $true
                                         if ($tabItem.SyncState.ProcessId -gt 0) {
                                             Stop-ProcessTree -processId $tabItem.SyncState.ProcessId
                                         }
@@ -8222,6 +8252,17 @@ $uiTimer.Add_Tick({
                     }
                 }
                 "error" {
+                    # Игнорируем запоздалые события ошибки, если ход уже завершён или закрыт Watchdog'ом
+                    if (-not $t.SyncState.IsRunning -or $t.SyncState.TurnResolvedByWatchdog) {
+                        continue
+                    }
+
+                    $errMsg = $item.Message
+                    # Игнорируем некритические информационные предупреждения CLI (песочница на Windows и т.д.)
+                    if (($errMsg -match '(?i)warning:\s*--mode.*sandbox is not available|continuing in the default mode') -and -not ($errMsg -match '(?i)error|exception|failed|denied|fatal')) {
+                        continue
+                    }
+
                     Finalize-ActiveToolGroup -Tab $t
                     Finalize-TabStreamingBuffer -Tab $t
                     if ($t.SyncState.Stopwatch) {
@@ -8754,6 +8795,7 @@ function Start-AgentExecutionJob {
 
     $Tab.SyncState.IsRunning = $true
     $Tab.SyncState.StopRequested = $false
+    $Tab.SyncState.TurnResolvedByWatchdog = $false
     $Tab.SyncState.ProcessId = 0
     $Tab.SyncState.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $Tab.SyncState.TurnStartTimeUtc = [DateTime]::UtcNow
@@ -8894,13 +8936,25 @@ function Start-AgentExecutionJob {
                 }
             } catch {}
 
-            if ($st.StopRequested) {
-                # Остановлено пользователем
+            if ($st.StopRequested -or $st.TurnResolvedByWatchdog) {
+                # Остановлено пользователем или завершено Watchdog'ом — не генерируем ложных ошибок
             } elseif ($turnFinished) {
                 $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
             } else {
-                if ($errOutput -and $proc.ExitCode -ne 0) {
-                    $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = $errOutput })
+                # Фильтруем некритические предупреждения CLI (песочница Windows, gRPC и т.д.)
+                $realErrors = @()
+                if ($errOutput) {
+                    $errLines = $errOutput -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                    foreach ($el in $errLines) {
+                        $trimmed = $el.Trim()
+                        if ($trimmed -match '(?i)warning:\s*--mode.*sandbox is not available|continuing in the default mode') { continue }
+                        if ($trimmed -match '(?i)^warning:') { continue }
+                        $realErrors += $trimmed
+                    }
+                }
+
+                if ($realErrors.Count -gt 0 -and $proc.ExitCode -ne 0) {
+                    $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = ($realErrors -join "`r`n") })
                 } else {
                     $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
                 }

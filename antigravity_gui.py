@@ -261,6 +261,31 @@ def format_token_count(tokens: int) -> str:
     return f"{val_m:g}M"
 
 
+def get_transcript_path(conversation_id: str, prefer_full: bool = True) -> str:
+    """Возвращает путь к логу диалога, отдавая приоритет полному transcript_full.jsonl при его наличии."""
+    if not conversation_id:
+        return ""
+    home_dir = os.path.expanduser("~")
+    logs_dir = os.path.join(home_dir, ".gemini", "antigravity-cli", "brain", conversation_id, ".system_generated", "logs")
+    full_path = os.path.join(logs_dir, "transcript_full.jsonl")
+    compact_path = os.path.join(logs_dir, "transcript.jsonl")
+    alt_path = os.path.join(home_dir, ".gemini", "antigravity-cli", "brain", conversation_id, "transcript.jsonl")
+
+    if prefer_full and os.path.isfile(full_path):
+        try:
+            if os.path.getsize(full_path) > 0:
+                return full_path
+        except OSError:
+            pass
+    if os.path.isfile(compact_path):
+        return compact_path
+    if os.path.isfile(full_path):
+        return full_path
+    if os.path.isfile(alt_path):
+        return alt_path
+    return compact_path
+
+
 def get_conversation_context_stats(conv_id: str, model_name: str = "gemini-3.8-flash-high") -> dict:
     """Считывает последние метрики токенов из транскрипта и рассчитывает заполненность контекста."""
     max_limit = get_model_context_limit(model_name)
@@ -287,14 +312,9 @@ def get_conversation_context_stats(conv_id: str, model_name: str = "gemini-3.8-f
     if not conv_id:
         return default_res
 
-    brain_dir = os.path.expanduser(r"~/.gemini/antigravity-cli/brain")
-    transcript_path = os.path.join(brain_dir, conv_id, ".system_generated", "logs", "transcript.jsonl")
-    if not os.path.isfile(transcript_path):
-        alt = os.path.join(brain_dir, conv_id, "transcript.jsonl")
-        if os.path.isfile(alt):
-            transcript_path = alt
-        else:
-            return default_res
+    transcript_path = get_transcript_path(conv_id, prefer_full=True)
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return default_res
 
     try:
         file_size = os.path.getsize(transcript_path)
@@ -451,9 +471,8 @@ def get_daily_usage_stats(model_name="gemini-3.8-flash-high", force_refresh=Fals
 
 def get_conversation_preview_text(conversation_id):
     """Формирование подробного текстового предпросмотра диалога."""
-    home_dir = os.path.expanduser("~")
-    tpath = os.path.join(home_dir, ".gemini", "antigravity-cli", "brain", conversation_id, ".system_generated", "logs", "transcript.jsonl")
-    if not os.path.isfile(tpath):
+    tpath = get_transcript_path(conversation_id, prefer_full=True)
+    if not tpath or not os.path.isfile(tpath):
         return "История диалога пуста или файл transcript.jsonl не найден."
 
     user_prompts = []
@@ -563,9 +582,8 @@ def parse_system_message_text(text: str):
 
 def load_conversation_transcript(conversation_id):
     """Загрузка сообщений диалога для отображения в основном окне чата."""
-    home_dir = os.path.expanduser("~")
-    tpath = os.path.join(home_dir, ".gemini", "antigravity-cli", "brain", conversation_id, ".system_generated", "logs", "transcript.jsonl")
-    if not os.path.isfile(tpath):
+    tpath = get_transcript_path(conversation_id, prefer_full=True)
+    if not tpath or not os.path.isfile(tpath):
         return []
 
     items = []
@@ -2420,10 +2438,26 @@ class AntigravityGUI(tk.Tk):
             except Exception:
                 pass
 
+            real_errors = []
+            if err_out:
+                for line in err_out.splitlines():
+                    s = line.strip()
+                    if not s:
+                        continue
+                    if "warning: --mode" in s and "sandbox is not available" in s:
+                        continue
+                    if "continuing in the default mode" in s:
+                        continue
+                    if s.lower().startswith("warning:"):
+                        continue
+                    real_errors.append(s)
+
+            clean_err = "\n".join(real_errors).strip()
+
             if turn_finished:
                 self.event_queue.put(("done", None))
-            elif ret_code != 0 and err_out:
-                self.event_queue.put(("error", err_out))
+            elif ret_code != 0 and clean_err:
+                self.event_queue.put(("error", clean_err))
             else:
                 self.event_queue.put(("done", None))
 
@@ -2521,7 +2555,11 @@ class AntigravityGUI(tk.Tk):
                         self.lbl_status_dot.config(fg="#4CAF50")
                         self.lbl_status_text.config(text="Готов к работе")
                         self.txt_prompt.focus()
-                                elif evt_type == "error":
+                elif evt_type == "error":
+                    if not self.is_running:
+                        continue
+                    if payload and "warning: --mode" in payload and "sandbox is not available" in payload and "error" not in payload.lower():
+                        continue
                     if self.active_tool_card:
                         self.active_tool_card.finalize()
                         self.active_tool_card = None
