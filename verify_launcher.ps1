@@ -315,7 +315,8 @@ if (-not $testBrush -or -not $testBrush.IsFrozen) {
     exit 1
 }
 
-if (-not $global:BrushCache.ContainsKey("#4FC1FF") -or -not $global:BrushCache.ContainsKey("#C586C0")) {
+# Ключ кэша - материал игровой темы и цвет (Get-CachedBrush), по умолчанию материал paper
+if (-not $global:BrushCache.ContainsKey("paper|#4FC1FF") -or -not $global:BrushCache.ContainsKey("paper|#C586C0")) {
     Write-Error "Кэш кистей global:BrushCache не содержит запрошенных цветов!"
     exit 1
 }

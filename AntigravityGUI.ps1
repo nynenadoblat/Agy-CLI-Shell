@@ -40,6 +40,9 @@ if (-not (Test-Path $defaultAgyPath)) {
     }
 }
 
+# Игровая тема «Пустошь»: перевод цветов и фактуры. Тему надо знать до загрузки разметки окна.
+. (Join-Path $PSScriptRoot "GameTheme.ps1")
+
 # --- XAML Интерфейс в современном темном стиле ---
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -237,7 +240,7 @@ if (-not (Test-Path $defaultAgyPath)) {
         </Grid.RowDefinitions>
 
         <!-- ВЕРХНЯЯ ПАНЕЛЬ -->
-        <Border Grid.Row="0" Background="#202020" BorderBrush="#2D2D30" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+        <Border x:Name="BorderTopPanel" Grid.Row="0" Background="#202020" BorderBrush="#2D2D30" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -332,7 +335,7 @@ if (-not (Test-Path $defaultAgyPath)) {
         </Border>
 
         <!-- ЦЕНТРАЛЬНОЕ ОКНО ЧАТА -->
-        <Border Grid.Row="2" Background="#1E1E1E" BorderBrush="#2D2D30" BorderThickness="1,0,1,1" CornerRadius="0,0,6,6" Margin="0,0,0,12">
+        <Border x:Name="BorderChat" Theme="paper" Grid.Row="2" Background="#1E1E1E" BorderBrush="#2D2D30" BorderThickness="1,0,1,1" CornerRadius="0,0,6,6" Margin="0,0,0,12">
             <Grid>
                 <RichTextBox x:Name="TxtChatLog"
                              Background="#1E1E1E"
@@ -350,7 +353,7 @@ if (-not (Test-Path $defaultAgyPath)) {
 
                 <!-- ВСПЛЫВАЮЩЕЕ МЕНЮ ВЫДЕЛЕНИЯ ТЕКСТА (ЧЕРЕЗ 0.5 СЕК) -->
                 <Popup x:Name="PopSelectionMenu" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade" Placement="MousePoint">
-                    <Border Background="#252528" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="4">
+                    <Border Theme="metal" Background="#252528" BorderBrush="#3E3E42" BorderThickness="1" CornerRadius="6" Padding="4">
                         <Border.Effect>
                             <DropShadowEffect Color="#000000" BlurRadius="10" ShadowDepth="2" Opacity="0.5"/>
                         </Border.Effect>
@@ -405,7 +408,7 @@ if (-not (Test-Path $defaultAgyPath)) {
             </Grid.RowDefinitions>
 
             <!-- ПАНЕЛЬ ПРИКРЕПЛЕННЫХ ИЗОБРАЖЕНИЙ -->
-            <Border x:Name="BorderAttachments" Grid.Row="0" Background="#1C2128" BorderBrush="#30363D" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,0,0,8" Visibility="Collapsed">
+            <Border x:Name="BorderAttachments" Theme="paper" Grid.Row="0" Background="#1C2128" BorderBrush="#30363D" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,0,0,8" Visibility="Collapsed">
                 <DockPanel LastChildFill="True">
                     <TextBlock DockPanel.Dock="Left" Text="📎 Прикреплено:" VerticalAlignment="Center" Foreground="#8B949E" FontWeight="SemiBold" Margin="0,0,10,0"/>
                     <Button x:Name="BtnClearAttachments" DockPanel.Dock="Right" Content="Очистить все" Padding="6,2" FontSize="11" Background="#21262D" BorderBrush="#30363D" Foreground="#F85149" Margin="8,0,0,0" ToolTip="Удалить все прикрепленные изображения"/>
@@ -423,7 +426,7 @@ if (-not (Test-Path $defaultAgyPath)) {
                 </Grid.ColumnDefinitions>
 
                 <!-- Поле ввода промпта и плашка ответа на цитату -->
-                <DockPanel Grid.Column="0" Margin="0,0,8,0">
+                <DockPanel Grid.Column="0" Theme="paper" Margin="0,0,8,0">
                     <!-- Панель цитирования / ответа на сообщение -->
                     <Border x:Name="BorderQuoteReply" DockPanel.Dock="Top" Background="#1E2638" BorderBrush="#2D4373" BorderThickness="1,1,1,0" CornerRadius="6,6,0,0" Padding="8,5" Visibility="Collapsed">
                         <DockPanel LastChildFill="True">
@@ -505,7 +508,7 @@ if (-not (Test-Path $defaultAgyPath)) {
         </Grid>
 
         <!-- СТАТУС БАР -->
-        <Border Grid.Row="4" Background="#141414" BorderBrush="#252526" BorderThickness="1" CornerRadius="4" Padding="8,4">
+        <Border x:Name="BorderStatusBar" Grid.Row="4" Background="#141414" BorderBrush="#252526" BorderThickness="1" CornerRadius="4" Padding="8,4">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -516,6 +519,8 @@ if (-not (Test-Path $defaultAgyPath)) {
                     <ColumnDefinition Width="16"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="8"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
@@ -590,6 +595,7 @@ if (-not (Test-Path $defaultAgyPath)) {
                 <TextBlock x:Name="TxtZoom" Grid.Column="4" Text="🔍 100% (13pt)" ToolTip="Масштаб шрифта: зажмите Ctrl + колесико мыши (или Ctrl+0 / клик для сброса)" VerticalAlignment="Center" Foreground="#888888" Cursor="Hand"/>
                 <TextBlock x:Name="TxtConversationId" Grid.Column="6" Text="Диалог: Новый" VerticalAlignment="Center" Foreground="#888888" Cursor="Hand" ToolTip="Нажмите, чтобы открыть менеджер разговоров"/>
                 <Button x:Name="BtnClearLog" Grid.Column="8" Content="Очистить лог" Padding="8,2" FontSize="11" Background="#252526" BorderBrush="#3E3E42"/>
+                <Button x:Name="BtnTheme" Grid.Column="10" Content="🎨 Тема ▾" Padding="8,2" FontSize="11" Background="#252526" BorderBrush="#3E3E42" ToolTip="Оформление лаунчера: тёмное или игровое «Пустошь»"/>
             </Grid>
         </Border>
     </Grid>
@@ -597,8 +603,9 @@ if (-not (Test-Path $defaultAgyPath)) {
 "@
 
 # Загрузка XAML
-$reader = [System.Xml.XmlNodeReader]::new($xaml)
+$reader = [System.Xml.XmlNodeReader]::new((Convert-ThemeXaml $xaml 'metal'))
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
+Set-GameThemeSurfaces $window
 
 # --- Глобальная защита от вылетов в событиях UI WPF (Dispatcher Unhandled Exception) ---
 $window.Dispatcher.Add_UnhandledException({
@@ -743,6 +750,7 @@ function Write-PerfLog {
         # лог диагностики не должен ронять приложение
     }
 }
+if ($global:LauncherThemeReadError) { Write-PerfLog $global:LauncherThemeReadError }
 
 # Читает JSON-файл настроек. Возвращает $null, если файл пустой или повреждён (причина пишется в perf.log).
 function Read-ConfigFile {
@@ -935,8 +943,8 @@ function Show-ImageViewerWindow {
     if ($window -and $window.IsVisible) {
         $viewer.Owner = $window
     }
-    $viewer.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161A22")
-    $viewer.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E6EDF3")
+    $viewer.Background = (Get-CachedBrush "#161A22" metal)
+    $viewer.Foreground = (Get-CachedBrush "#E6EDF3" metal)
 
     $rootGrid = [System.Windows.Controls.Grid]::new()
     $rowTop = [System.Windows.Controls.RowDefinition]::new()
@@ -955,8 +963,8 @@ function Show-ImageViewerWindow {
 
     # 1. Верхняя панель (Заголовок, метаданные и системные действия)
     $topBar = [System.Windows.Controls.Border]::new()
-    $topBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F242C")
-    $topBar.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $topBar.Background = (Get-CachedBrush "#1F242C" metal)
+    $topBar.BorderBrush = (Get-CachedBrush "#30363D" metal)
     $topBar.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
     $topBar.Padding = [System.Windows.Thickness]::new(14, 0, 14, 0)
     [System.Windows.Controls.Grid]::SetRow($topBar, 0)
@@ -971,7 +979,7 @@ function Show-ImageViewerWindow {
     $btnSys = [System.Windows.Controls.Button]::new()
     $btnSys.Content = "🖼️ В системе"
     $btnSys.ToolTip = "Открыть во внешнем системном просмотрщике Windows"
-    $btnSys.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#238636")
+    $btnSys.Background = (Get-CachedBrush "#238636" metal)
     $btnSys.Foreground = [System.Windows.Media.Brushes]::White
     $btnSys.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnSys.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
@@ -991,8 +999,8 @@ function Show-ImageViewerWindow {
     $btnFolder = [System.Windows.Controls.Button]::new()
     $btnFolder.Content = "📁 В папке"
     $btnFolder.ToolTip = "Открыть папку с файлом в Проводнике"
-    $btnFolder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
-    $btnFolder.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnFolder.Background = (Get-CachedBrush "#2D333B" metal)
+    $btnFolder.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnFolder.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnFolder.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
     $btnFolder.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
@@ -1007,8 +1015,8 @@ function Show-ImageViewerWindow {
     $btnCopyImg = [System.Windows.Controls.Button]::new()
     $btnCopyImg.Content = "📋 Картинка"
     $btnCopyImg.ToolTip = "Скопировать изображение в буфер обмена"
-    $btnCopyImg.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
-    $btnCopyImg.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnCopyImg.Background = (Get-CachedBrush "#2D333B" metal)
+    $btnCopyImg.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnCopyImg.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnCopyImg.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
     $btnCopyImg.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
@@ -1031,8 +1039,8 @@ function Show-ImageViewerWindow {
     $btnCopyPath = [System.Windows.Controls.Button]::new()
     $btnCopyPath.Content = "📋 Путь"
     $btnCopyPath.ToolTip = "Скопировать путь к файлу в буфер обмена"
-    $btnCopyPath.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
-    $btnCopyPath.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnCopyPath.Background = (Get-CachedBrush "#2D333B" metal)
+    $btnCopyPath.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnCopyPath.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnCopyPath.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
     $btnCopyPath.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
@@ -1056,7 +1064,7 @@ function Show-ImageViewerWindow {
     $btnClose.Content = "✕"
     $btnClose.ToolTip = "Закрыть окно (Esc)"
     $btnClose.Background = [System.Windows.Media.Brushes]::Transparent
-    $btnClose.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+    $btnClose.Foreground = (Get-CachedBrush "#8B949E" metal)
     $btnClose.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnClose.FontSize = 14
     $btnClose.FontWeight = [System.Windows.FontWeights]::Bold
@@ -1074,14 +1082,14 @@ function Show-ImageViewerWindow {
     $tbTitle.Text = $dispTitle
     $tbTitle.FontWeight = [System.Windows.FontWeights]::Bold
     $tbTitle.FontSize = 13
-    $tbTitle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F0F6FC")
+    $tbTitle.Foreground = (Get-CachedBrush "#F0F6FC" metal)
     $tbTitle.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
     [void]$pnlTitle.Children.Add($tbTitle)
 
     $tbMeta = [System.Windows.Controls.TextBlock]::new()
     $tbMeta.Text = "${w} × ${h} px  •  ${fileSizeKB} KB  •  $targetPath"
     $tbMeta.FontSize = 10
-    $tbMeta.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+    $tbMeta.Foreground = (Get-CachedBrush "#8B949E" metal)
     $tbMeta.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
     [void]$pnlTitle.Children.Add($tbMeta)
 
@@ -1091,8 +1099,8 @@ function Show-ImageViewerWindow {
 
     # 2. Панель инструментов разметки (Drawing Toolbar)
     $toolBar = [System.Windows.Controls.Border]::new()
-    $toolBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161B22")
-    $toolBar.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $toolBar.Background = (Get-CachedBrush "#161B22" metal)
+    $toolBar.BorderBrush = (Get-CachedBrush "#30363D" metal)
     $toolBar.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
     $toolBar.Padding = [System.Windows.Thickness]::new(14, 0, 14, 0)
     [System.Windows.Controls.Grid]::SetRow($toolBar, 1)
@@ -1114,9 +1122,9 @@ function Show-ImageViewerWindow {
     $btnModePan.Padding = [System.Windows.Thickness]::new(10, 2, 10, 2)
     $btnModePan.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $btnModePan.Cursor = [System.Windows.Input.Cursors]::Hand
-    $btnModePan.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F6FEB")
+    $btnModePan.Background = (Get-CachedBrush "#1F6FEB" metal)
     $btnModePan.Foreground = [System.Windows.Media.Brushes]::White
-    $btnModePan.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#388BFD")
+    $btnModePan.BorderBrush = (Get-CachedBrush "#388BFD" metal)
     $btnModePan.BorderThickness = [System.Windows.Thickness]::new(1)
     $modeButtons.Add([pscustomobject]@{ Mode="Pan"; Button=$btnModePan })
     [void]$pnlToolsLeft.Children.Add($btnModePan)
@@ -1128,9 +1136,9 @@ function Show-ImageViewerWindow {
     $btnModeRect.Padding = [System.Windows.Thickness]::new(10, 2, 10, 2)
     $btnModeRect.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $btnModeRect.Cursor = [System.Windows.Input.Cursors]::Hand
-    $btnModeRect.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnModeRect.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
-    $btnModeRect.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $btnModeRect.Background = (Get-CachedBrush "#21262D" metal)
+    $btnModeRect.Foreground = (Get-CachedBrush "#C9D1D9" metal)
+    $btnModeRect.BorderBrush = (Get-CachedBrush "#30363D" metal)
     $btnModeRect.BorderThickness = [System.Windows.Thickness]::new(1)
     $modeButtons.Add([pscustomobject]@{ Mode="Rect"; Button=$btnModeRect })
     [void]$pnlToolsLeft.Children.Add($btnModeRect)
@@ -1142,9 +1150,9 @@ function Show-ImageViewerWindow {
     $btnModeArrow.Padding = [System.Windows.Thickness]::new(10, 2, 10, 2)
     $btnModeArrow.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
     $btnModeArrow.Cursor = [System.Windows.Input.Cursors]::Hand
-    $btnModeArrow.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnModeArrow.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
-    $btnModeArrow.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $btnModeArrow.Background = (Get-CachedBrush "#21262D" metal)
+    $btnModeArrow.Foreground = (Get-CachedBrush "#C9D1D9" metal)
+    $btnModeArrow.BorderBrush = (Get-CachedBrush "#30363D" metal)
     $btnModeArrow.BorderThickness = [System.Windows.Thickness]::new(1)
     $modeButtons.Add([pscustomobject]@{ Mode="Arrow"; Button=$btnModeArrow })
     [void]$pnlToolsLeft.Children.Add($btnModeArrow)
@@ -1152,7 +1160,7 @@ function Show-ImageViewerWindow {
     $sep1 = [System.Windows.Controls.Border]::new()
     $sep1.Width = 1
     $sep1.Height = 18
-    $sep1.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $sep1.Background = (Get-CachedBrush "#30363D" metal)
     $sep1.Margin = [System.Windows.Thickness]::new(4, 0, 10, 0)
     [void]$pnlToolsLeft.Children.Add($sep1)
 
@@ -1176,7 +1184,7 @@ function Show-ImageViewerWindow {
             $btnColor.BorderBrush = [System.Windows.Media.Brushes]::White
             $btnColor.BorderThickness = [System.Windows.Thickness]::new(2)
         } else {
-            $btnColor.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+            $btnColor.BorderBrush = (Get-CachedBrush "#30363D" metal)
             $btnColor.BorderThickness = [System.Windows.Thickness]::new(1)
         }
         $hexVal = $c.Hex
@@ -1187,7 +1195,7 @@ function Show-ImageViewerWindow {
     $sep2 = [System.Windows.Controls.Border]::new()
     $sep2.Width = 1
     $sep2.Height = 18
-    $sep2.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $sep2.Background = (Get-CachedBrush "#30363D" metal)
     $sep2.Margin = [System.Windows.Thickness]::new(8, 0, 10, 0)
     [void]$pnlToolsLeft.Children.Add($sep2)
 
@@ -1199,8 +1207,8 @@ function Show-ImageViewerWindow {
     $btnUndo.Padding = [System.Windows.Thickness]::new(8, 2, 8, 2)
     $btnUndo.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $btnUndo.Cursor = [System.Windows.Input.Cursors]::Hand
-    $btnUndo.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnUndo.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnUndo.Background = (Get-CachedBrush "#21262D" metal)
+    $btnUndo.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnUndo.BorderThickness = [System.Windows.Thickness]::new(0)
     [void]$pnlToolsLeft.Children.Add($btnUndo)
 
@@ -1212,8 +1220,8 @@ function Show-ImageViewerWindow {
     $btnClear.Padding = [System.Windows.Thickness]::new(8, 2, 8, 2)
     $btnClear.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $btnClear.Cursor = [System.Windows.Input.Cursors]::Hand
-    $btnClear.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnClear.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnClear.Background = (Get-CachedBrush "#21262D" metal)
+    $btnClear.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnClear.BorderThickness = [System.Windows.Thickness]::new(0)
     [void]$pnlToolsLeft.Children.Add($btnClear)
 
@@ -1226,7 +1234,7 @@ function Show-ImageViewerWindow {
     $btnApply.Height = 28
     $btnApply.Padding = [System.Windows.Thickness]::new(14, 2, 14, 2)
     $btnApply.Cursor = [System.Windows.Input.Cursors]::Hand
-    $btnApply.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#238636")
+    $btnApply.Background = (Get-CachedBrush "#238636" metal)
     $btnApply.Foreground = [System.Windows.Media.Brushes]::White
     $btnApply.FontWeight = [System.Windows.FontWeights]::SemiBold
     $btnApply.BorderThickness = [System.Windows.Thickness]::new(0)
@@ -1238,7 +1246,7 @@ function Show-ImageViewerWindow {
 
     # 3. Центральная область с изображением и векторным холстом
     $canvasHost = [System.Windows.Controls.Grid]::new()
-    $canvasHost.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#0D1117")
+    $canvasHost.Background = (Get-CachedBrush "#0D1117" metal)
     $canvasHost.ClipToBounds = $true
     $canvasHost.Cursor = [System.Windows.Input.Cursors]::Hand
     [System.Windows.Controls.Grid]::SetRow($canvasHost, 2)
@@ -1282,8 +1290,8 @@ function Show-ImageViewerWindow {
 
     # 4. Нижняя панель подсказок и масштабирования
     $botBar = [System.Windows.Controls.Border]::new()
-    $botBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161B22")
-    $botBar.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+    $botBar.Background = (Get-CachedBrush "#161B22" metal)
+    $botBar.BorderBrush = (Get-CachedBrush "#30363D" metal)
     $botBar.BorderThickness = [System.Windows.Thickness]::new(0, 1, 0, 0)
     $botBar.Padding = [System.Windows.Thickness]::new(12, 0, 12, 0)
     [System.Windows.Controls.Grid]::SetRow($botBar, 3)
@@ -1295,7 +1303,7 @@ function Show-ImageViewerWindow {
     $lblHelp.Text = "💡 Перемещение: зажмите ЛКМ  •  Колесико: масштаб  •  2x клик: сброс  •  Esc: закрыть"
     $lblHelp.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
     $lblHelp.FontSize = 11
-    $lblHelp.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+    $lblHelp.Foreground = (Get-CachedBrush "#8B949E" metal)
     [System.Windows.Controls.DockPanel]::SetDock($lblHelp, [System.Windows.Controls.Dock]::Left)
     [void]$botGrid.Children.Add($lblHelp)
 
@@ -1310,14 +1318,14 @@ function Show-ImageViewerWindow {
     $lblZoomVal.Margin = [System.Windows.Thickness]::new(8, 0, 8, 0)
     $lblZoomVal.FontSize = 11
     $lblZoomVal.FontWeight = [System.Windows.FontWeights]::SemiBold
-    $lblZoomVal.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $lblZoomVal.Foreground = (Get-CachedBrush "#C9D1D9" metal)
 
     $btnZoomOut = [System.Windows.Controls.Button]::new()
     $btnZoomOut.Content = "➖"
     $btnZoomOut.Width = 26
     $btnZoomOut.Height = 22
-    $btnZoomOut.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnZoomOut.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomOut.Background = (Get-CachedBrush "#21262D" metal)
+    $btnZoomOut.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnZoomOut.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnZoomOut.Cursor = [System.Windows.Input.Cursors]::Hand
 
@@ -1325,8 +1333,8 @@ function Show-ImageViewerWindow {
     $btnZoomIn.Content = "➕"
     $btnZoomIn.Width = 26
     $btnZoomIn.Height = 22
-    $btnZoomIn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnZoomIn.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomIn.Background = (Get-CachedBrush "#21262D" metal)
+    $btnZoomIn.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnZoomIn.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnZoomIn.Cursor = [System.Windows.Input.Cursors]::Hand
 
@@ -1336,8 +1344,8 @@ function Show-ImageViewerWindow {
     $btnZoomReset.Width = 32
     $btnZoomReset.Height = 22
     $btnZoomReset.Margin = [System.Windows.Thickness]::new(6, 0, 0, 0)
-    $btnZoomReset.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnZoomReset.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomReset.Background = (Get-CachedBrush "#21262D" metal)
+    $btnZoomReset.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnZoomReset.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnZoomReset.Cursor = [System.Windows.Input.Cursors]::Hand
 
@@ -1352,8 +1360,8 @@ function Show-ImageViewerWindow {
     $btnZoomFit.Width = 26
     $btnZoomFit.Height = 22
     $btnZoomFit.Margin = [System.Windows.Thickness]::new(4, 0, 0, 0)
-    $btnZoomFit.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-    $btnZoomFit.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $btnZoomFit.Background = (Get-CachedBrush "#21262D" metal)
+    $btnZoomFit.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnZoomFit.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnZoomFit.Cursor = [System.Windows.Input.Cursors]::Hand
     [void]$pnlZoom.Children.Add($btnZoomFit)
@@ -1407,13 +1415,13 @@ function Show-ImageViewerWindow {
         $state.CurrentMode = $newMode
         foreach ($mb in $state.ModeButtons) {
             if ($mb.Mode -eq $newMode) {
-                $mb.Button.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F6FEB")
+                $mb.Button.Background = (Get-CachedBrush "#1F6FEB" metal)
                 $mb.Button.Foreground = [System.Windows.Media.Brushes]::White
-                $mb.Button.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#388BFD")
+                $mb.Button.BorderBrush = (Get-CachedBrush "#388BFD" metal)
             } else {
-                $mb.Button.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
-                $mb.Button.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
-                $mb.Button.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+                $mb.Button.Background = (Get-CachedBrush "#21262D" metal)
+                $mb.Button.Foreground = (Get-CachedBrush "#C9D1D9" metal)
+                $mb.Button.BorderBrush = (Get-CachedBrush "#30363D" metal)
             }
         }
         if ($newMode -eq "Pan") {
@@ -1445,7 +1453,7 @@ function Show-ImageViewerWindow {
                     $item.Button.BorderBrush = [System.Windows.Media.Brushes]::White
                     $item.Button.BorderThickness = [System.Windows.Thickness]::new(2)
                 } else {
-                    $item.Button.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
+                    $item.Button.BorderBrush = (Get-CachedBrush "#30363D" metal)
                     $item.Button.BorderThickness = [System.Windows.Thickness]::new(1)
                 }
             }
@@ -1888,12 +1896,12 @@ function Show-ImageViewerWindow {
             Render-AttachmentsUI
 
             $state.BtnApply.Content = "✅ Разметка сохранена!"
-            $state.BtnApply.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F6FEB")
+            $state.BtnApply.Background = (Get-CachedBrush "#1F6FEB" metal)
             $t = [System.Windows.Threading.DispatcherTimer]::new()
             $t.Interval = [TimeSpan]::FromMilliseconds(2000)
             $t.Add_Tick({
                 $state.BtnApply.Content = "💾 Применить разметку"
-                $state.BtnApply.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#238636")
+                $state.BtnApply.Background = (Get-CachedBrush "#238636" metal)
                 $t.Stop()
             }.GetNewClosure())
             $t.Start()
@@ -1951,10 +1959,10 @@ function Render-AttachmentsUI {
 
         # Карточка вложения
         $card = [System.Windows.Controls.Border]::new()
-        $card.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#252A30")
-        $card.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#383E4A")
+        $card.Background = (Get-CachedBrush "#252A30" paper)
+        $card.BorderBrush = (Get-CachedBrush "#383E4A" paper)
         $card.BorderThickness = [System.Windows.Thickness]::new(1)
-        $card.CornerRadius = [System.Windows.CornerRadius]::new(4)
+        $card.CornerRadius = (New-ThemeCorner 4)
         $card.Padding = [System.Windows.Thickness]::new(4, 4, 6, 4)
         $card.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
 
@@ -1984,7 +1992,7 @@ function Render-AttachmentsUI {
             $imgCtrl.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
 
             $imgBorder = [System.Windows.Controls.Border]::new()
-            $imgBorder.CornerRadius = [System.Windows.CornerRadius]::new(3)
+            $imgBorder.CornerRadius = (New-ThemeCorner 3)
             $imgBorder.ClipToBounds = $true
             $imgBorder.Child = $imgCtrl
             [void]$clickablePart.Children.Add($imgBorder)
@@ -1992,11 +2000,11 @@ function Render-AttachmentsUI {
             $iconBorder = [System.Windows.Controls.Border]::new()
             $iconBorder.Width = 36
             $iconBorder.Height = 36
-            $iconBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $iconBorder.CornerRadius = (New-ThemeCorner 4)
             $iconBorder.Background = if ($itemType -eq "Folder") {
-                [System.Windows.Media.BrushConverter]::new().ConvertFromString("#382A15")
+                (Get-CachedBrush "#382A15" paper)
             } else {
-                [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1C2D42")
+                (Get-CachedBrush "#1C2D42" paper)
             }
             $iconBorder.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
 
@@ -2017,14 +2025,14 @@ function Render-AttachmentsUI {
         $lblTitle.Text = $item.DisplayName
         $lblTitle.FontWeight = [System.Windows.FontWeights]::SemiBold
         $lblTitle.FontSize = 11
-        $lblTitle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E6EDF3")
+        $lblTitle.Foreground = (Get-CachedBrush "#E6EDF3" paper)
         [void]$txtBox.Children.Add($lblTitle)
 
         if ($item.DimInfo) {
             $lblSub = [System.Windows.Controls.TextBlock]::new()
             $lblSub.Text = $item.DimInfo
             $lblSub.FontSize = 10
-            $lblSub.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#8B949E")
+            $lblSub.Foreground = (Get-CachedBrush "#8B949E" paper)
             [void]$txtBox.Children.Add($lblSub)
         }
 
@@ -2033,7 +2041,7 @@ function Render-AttachmentsUI {
             $lblAnnotBadge.Text = "🎯 С разметкой (2 файла)"
             $lblAnnotBadge.FontSize = 10
             $lblAnnotBadge.FontWeight = [System.Windows.FontWeights]::SemiBold
-            $lblAnnotBadge.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#3FB950")
+            $lblAnnotBadge.Foreground = (Get-CachedBrush "#3FB950" paper)
             [void]$txtBox.Children.Add($lblAnnotBadge)
         }
         [void]$clickablePart.Children.Add($txtBox)
@@ -2041,12 +2049,12 @@ function Render-AttachmentsUI {
         # Интерактивная подсветка рамки при наведении мыши
         $cardRef = $card
         $clickablePart.Add_MouseEnter({
-            $cardRef.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#58A6FF")
-            $cardRef.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D333B")
+            $cardRef.BorderBrush = (Get-CachedBrush "#58A6FF" paper)
+            $cardRef.Background = (Get-CachedBrush "#2D333B" paper)
         }.GetNewClosure())
         $clickablePart.Add_MouseLeave({
-            $cardRef.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#383E4A")
-            $cardRef.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#252A30")
+            $cardRef.BorderBrush = (Get-CachedBrush "#383E4A" paper)
+            $cardRef.Background = (Get-CachedBrush "#252A30" paper)
         }.GetNewClosure())
 
         # Клик по карточке: просмотрщик для картинок, проводник для папок, запуск для файлов
@@ -2077,7 +2085,7 @@ function Render-AttachmentsUI {
         $btnRemove.Content = "✖"
         $btnRemove.Background = [System.Windows.Media.Brushes]::Transparent
         $btnRemove.BorderThickness = [System.Windows.Thickness]::new(0)
-        $btnRemove.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F85149")
+        $btnRemove.Foreground = (Get-CachedBrush "#F85149" paper)
         $btnRemove.FontWeight = [System.Windows.FontWeights]::Bold
         $btnRemove.FontSize = 12
         $btnRemove.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -2301,6 +2309,8 @@ function Save-LauncherConfig {
             }
         }
         $cfg["fontSize"] = [double]$global:CurrentFontSize
+        # Тему выбирает меню кнопки «🎨 Тема», а применяет запуск лаунчера (GameTheme.ps1)
+        if ($global:LauncherThemeChosen) { $cfg["theme"] = $global:LauncherThemeChosen }
 
         # Сохранение геометрии и состояния окна
         if ($window) {
@@ -2509,13 +2519,16 @@ Refresh-ProjectList
 $global:BrushCache = @{}
 $global:ActiveToolGroup = $null
 
-function Get-CachedBrush([string]$colorHex) {
-    if (-not $global:BrushCache.ContainsKey($colorHex)) {
-        $b = [System.Windows.Media.BrushConverter]::new().ConvertFromString($colorHex)
+# Kind - материал игровой темы (GameTheme.ps1): paper для чата и окон, metal для панелей, вкладок и кнопок.
+# В тёмной теме Kind ничего не меняет.
+function Get-CachedBrush([string]$colorHex, [string]$Kind = 'paper') {
+    $key = "$Kind|$colorHex"
+    if (-not $global:BrushCache.ContainsKey($key)) {
+        $b = [System.Windows.Media.BrushConverter]::new().ConvertFromString((Convert-ThemeColor $colorHex $Kind))
         $b.Freeze()
-        $global:BrushCache[$colorHex] = $b
+        $global:BrushCache[$key] = $b
     }
-    return $global:BrushCache[$colorHex]
+    return $global:BrushCache[$key]
 }
 
 function Clear-ChatLog {
@@ -2757,7 +2770,7 @@ function Append-MarkdownFormatted {
             $border.Background = Get-CachedBrush "#161618"
             $border.BorderBrush = Get-CachedBrush "#2D2D30"
             $border.BorderThickness = [System.Windows.Thickness]::new(1)
-            $border.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $border.CornerRadius = (New-ThemeCorner 4)
             $border.Margin = [System.Windows.Thickness]::new(0, 4, 0, 6)
 
             $dock = [System.Windows.Controls.DockPanel]::new()
@@ -2766,7 +2779,7 @@ function Append-MarkdownFormatted {
             $header = [System.Windows.Controls.Border]::new()
             $header.Background = Get-CachedBrush "#1F1F22"
             $header.Padding = [System.Windows.Thickness]::new(8, 3, 8, 3)
-            $header.CornerRadius = [System.Windows.CornerRadius]::new(3, 3, 0, 0)
+            $header.CornerRadius = (New-ThemeCorner 3, 3, 0, 0)
             [System.Windows.Controls.DockPanel]::SetDock($header, [System.Windows.Controls.Dock]::Top)
 
             $grid = [System.Windows.Controls.Grid]::new()
@@ -2786,9 +2799,9 @@ function Append-MarkdownFormatted {
 
             $btnCopy = [System.Windows.Controls.Button]::new()
             $btnCopy.Content = "📋 Копировать"
-            $btnCopy.Background = Get-CachedBrush "#2D2D30"
-            $btnCopy.BorderBrush = Get-CachedBrush "#3E3E42"
-            $btnCopy.Foreground = Get-CachedBrush "#CCCCCC"
+            $btnCopy.Background = Get-CachedBrush "#2D2D30" metal
+            $btnCopy.BorderBrush = Get-CachedBrush "#3E3E42" metal
+            $btnCopy.Foreground = Get-CachedBrush "#CCCCCC" metal
             $btnCopy.FontSize = 10.0
             $btnCopy.Padding = [System.Windows.Thickness]::new(6, 1, 6, 1)
             $btnCopy.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -2845,7 +2858,7 @@ function Append-MarkdownFormatted {
                 $tblBorder.Background = Get-CachedBrush "#18181A"
                 $tblBorder.BorderBrush = Get-CachedBrush "#3E3E42"
                 $tblBorder.BorderThickness = [System.Windows.Thickness]::new(1)
-                $tblBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+                $tblBorder.CornerRadius = (New-ThemeCorner 4)
                 $tblBorder.Margin = [System.Windows.Thickness]::new(0, 4, 0, 6)
 
                 $grid = [System.Windows.Controls.Grid]::new()
@@ -2969,7 +2982,7 @@ function Append-MarkdownFormatted {
             $border.Background = Get-CachedBrush "#181E24"
             $border.Padding = [System.Windows.Thickness]::new(8, 4, 8, 4)
             $border.Margin = [System.Windows.Thickness]::new(0, 3, 0, 5)
-            $border.CornerRadius = [System.Windows.CornerRadius]::new(0, 3, 3, 0)
+            $border.CornerRadius = (New-ThemeCorner 0, 3, 3, 0)
 
             $tb = [System.Windows.Controls.TextBlock]::new()
             $tb.TextWrapping = [System.Windows.TextWrapping]::Wrap
@@ -3126,7 +3139,7 @@ function Append-UserMessageToLog {
         $quoteBorder.Background = (Get-CachedBrush "#1C2333")
         $quoteBorder.BorderBrush = (Get-CachedBrush "#388BFD")
         $quoteBorder.BorderThickness = [System.Windows.Thickness]::new(3, 0, 0, 0)
-        $quoteBorder.CornerRadius = [System.Windows.CornerRadius]::new(0, 4, 4, 0)
+        $quoteBorder.CornerRadius = (New-ThemeCorner 0, 4, 4, 0)
         $quoteBorder.Padding = [System.Windows.Thickness]::new(8, 4, 8, 4)
         $quoteBorder.Margin = [System.Windows.Thickness]::new(0, 4, 0, 2)
         $quoteBorder.ToolTip = $actualQuote
@@ -3223,7 +3236,7 @@ function Append-UserMessageToLog {
             $badgeBorder.Background = Get-CachedBrush "#262C36"
             $badgeBorder.BorderBrush = if ($isAnnotated) { Get-CachedBrush "#3FB950" } else { Get-CachedBrush "#38414E" }
             $badgeBorder.BorderThickness = [System.Windows.Thickness]::new(1)
-            $badgeBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $badgeBorder.CornerRadius = (New-ThemeCorner 4)
             $badgeBorder.Padding = [System.Windows.Thickness]::new(6, 2, 6, 2)
             $badgeBorder.Margin = [System.Windows.Thickness]::new(0, 0, 5, 0)
             $badgeBorder.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -3389,19 +3402,19 @@ function New-ToolGroupCard {
     )
 
     $card = [System.Windows.Controls.Border]::new()
-    $card.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#252526")
-    $card.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#3E3E42")
+    $card.Background = (Get-CachedBrush "#252526" paper)
+    $card.BorderBrush = (Get-CachedBrush "#3E3E42" paper)
     $card.BorderThickness = [System.Windows.Thickness]::new(1)
-    $card.CornerRadius = [System.Windows.CornerRadius]::new(4)
+    $card.CornerRadius = (New-ThemeCorner 4)
     $card.Margin = [System.Windows.Thickness]::new(0, 4, 0, 8)
 
     $dock = [System.Windows.Controls.DockPanel]::new()
 
     # Шапка / интерактивная панель группы
     $headerBtn = [System.Windows.Controls.Border]::new()
-    $headerBtn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D2D30")
+    $headerBtn.Background = (Get-CachedBrush "#2D2D30" paper)
     $headerBtn.Padding = [System.Windows.Thickness]::new(10, 6, 10, 6)
-    $headerBtn.CornerRadius = [System.Windows.CornerRadius]::new(3, 3, 0, 0)
+    $headerBtn.CornerRadius = (New-ThemeCorner 3, 3, 0, 0)
     $headerBtn.Cursor = [System.Windows.Input.Cursors]::Hand
     [System.Windows.Controls.DockPanel]::SetDock($headerBtn, [System.Windows.Controls.Dock]::Top)
 
@@ -3413,7 +3426,7 @@ function New-ToolGroupCard {
 
     $headerTitle = [System.Windows.Controls.TextBlock]::new()
     $headerTitle.Text = "⚙️ Вызовы инструментов (выполняется...)"
-    $headerTitle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#CE9178")
+    $headerTitle.Foreground = (Get-CachedBrush "#CE9178" paper)
     $headerTitle.FontWeight = [System.Windows.FontWeights]::Bold
     $headerTitle.Cursor = [System.Windows.Input.Cursors]::Hand
     [System.Windows.Controls.Grid]::SetColumn($headerTitle, 0)
@@ -3421,16 +3434,16 @@ function New-ToolGroupCard {
 
     # Кнопка-бейдж для наглядного сворачивания / разворачивания
     $toggleBadge = [System.Windows.Controls.Border]::new()
-    $toggleBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#38383C")
-    $toggleBadge.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4E4E52")
+    $toggleBadge.Background = (Get-CachedBrush "#38383C" paper)
+    $toggleBadge.BorderBrush = (Get-CachedBrush "#4E4E52" paper)
     $toggleBadge.BorderThickness = [System.Windows.Thickness]::new(1)
-    $toggleBadge.CornerRadius = [System.Windows.CornerRadius]::new(3)
+    $toggleBadge.CornerRadius = (New-ThemeCorner 3)
     $toggleBadge.Padding = [System.Windows.Thickness]::new(8, 2, 8, 2)
     $toggleBadge.Cursor = [System.Windows.Input.Cursors]::Hand
 
     $toggleHint = [System.Windows.Controls.TextBlock]::new()
     $toggleHint.Text = if ($StartCollapsed) { "▶ Развернуть" } else { "▼ Свернуть" }
-    $toggleHint.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#CCCCCC")
+    $toggleHint.Foreground = (Get-CachedBrush "#CCCCCC" paper)
     $toggleHint.FontSize = 11
     $toggleHint.FontWeight = [System.Windows.FontWeights]::SemiBold
     $toggleBadge.Child = $toggleHint
@@ -3444,7 +3457,7 @@ function New-ToolGroupCard {
     # Тело карточки (список вызовов)
     $bodyBorder = [System.Windows.Controls.Border]::new()
     $bodyBorder.Padding = [System.Windows.Thickness]::new(10, 6, 10, 8)
-    $bodyBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1E1E1E")
+    $bodyBorder.Background = (Get-CachedBrush "#1E1E1E" paper)
     if ($StartCollapsed) {
         $bodyBorder.Visibility = [System.Windows.Visibility]::Collapsed
     }
@@ -3583,19 +3596,19 @@ function New-SystemMessageCard {
     $Body = if ($Body -is [System.Collections.IList]) { ($Body -join "`r`n") } elseif ($null -eq $Body) { "" } else { [string]$Body }
 
     $card = [System.Windows.Controls.Border]::new()
-    $card.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1F2428")
-    $card.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#388BFD")
+    $card.Background = (Get-CachedBrush "#1F2428" paper)
+    $card.BorderBrush = (Get-CachedBrush "#388BFD" paper)
     $card.BorderThickness = [System.Windows.Thickness]::new(1)
-    $card.CornerRadius = [System.Windows.CornerRadius]::new(4)
+    $card.CornerRadius = (New-ThemeCorner 4)
     $card.Margin = [System.Windows.Thickness]::new(0, 4, 0, 6)
 
     $dock = [System.Windows.Controls.DockPanel]::new()
 
     # Шапка карточки
     $headerBtn = [System.Windows.Controls.Border]::new()
-    $headerBtn.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#21262D")
+    $headerBtn.Background = (Get-CachedBrush "#21262D" paper)
     $headerBtn.Padding = [System.Windows.Thickness]::new(10, 6, 10, 6)
-    $headerBtn.CornerRadius = [System.Windows.CornerRadius]::new(3, 3, 0, 0)
+    $headerBtn.CornerRadius = (New-ThemeCorner 3, 3, 0, 0)
     $headerBtn.Cursor = [System.Windows.Input.Cursors]::Hand
     [System.Windows.Controls.DockPanel]::SetDock($headerBtn, [System.Windows.Controls.Dock]::Top)
 
@@ -3607,23 +3620,23 @@ function New-SystemMessageCard {
 
     $headerTitle = [System.Windows.Controls.TextBlock]::new()
     $headerTitle.Text = "🔔 Системное уведомление: $Summary"
-    $headerTitle.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#58A6FF")
+    $headerTitle.Foreground = (Get-CachedBrush "#58A6FF" paper)
     $headerTitle.FontWeight = [System.Windows.FontWeights]::SemiBold
     $headerTitle.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
     [System.Windows.Controls.Grid]::SetColumn($headerTitle, 0)
     $headerGrid.Children.Add($headerTitle) | Out-Null
 
     $toggleBadge = [System.Windows.Controls.Border]::new()
-    $toggleBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#30363D")
-    $toggleBadge.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#484F58")
+    $toggleBadge.Background = (Get-CachedBrush "#30363D" paper)
+    $toggleBadge.BorderBrush = (Get-CachedBrush "#484F58" paper)
     $toggleBadge.BorderThickness = [System.Windows.Thickness]::new(1)
-    $toggleBadge.CornerRadius = [System.Windows.CornerRadius]::new(3)
+    $toggleBadge.CornerRadius = (New-ThemeCorner 3)
     $toggleBadge.Padding = [System.Windows.Thickness]::new(8, 2, 8, 2)
     $toggleBadge.Cursor = [System.Windows.Input.Cursors]::Hand
 
     $toggleHint = [System.Windows.Controls.TextBlock]::new()
     $toggleHint.Text = if ($StartCollapsed) { "▶ Развернуть" } else { "▼ Свернуть" }
-    $toggleHint.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $toggleHint.Foreground = (Get-CachedBrush "#C9D1D9" paper)
     $toggleHint.FontSize = 11
     $toggleHint.FontWeight = [System.Windows.FontWeights]::SemiBold
     $toggleBadge.Child = $toggleHint
@@ -3636,7 +3649,7 @@ function New-SystemMessageCard {
     # Тело карточки
     $bodyBorder = [System.Windows.Controls.Border]::new()
     $bodyBorder.Padding = [System.Windows.Thickness]::new(10, 8, 10, 8)
-    $bodyBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#161B22")
+    $bodyBorder.Background = (Get-CachedBrush "#161B22" paper)
     if ($StartCollapsed) {
         $bodyBorder.Visibility = [System.Windows.Visibility]::Collapsed
     }
@@ -3647,7 +3660,7 @@ function New-SystemMessageCard {
     $txtBody.IsUndoEnabled = $false
     $txtBody.Background = [System.Windows.Media.Brushes]::Transparent
     $txtBody.BorderThickness = [System.Windows.Thickness]::new(0)
-    $txtBody.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#C9D1D9")
+    $txtBody.Foreground = (Get-CachedBrush "#C9D1D9" paper)
     $txtBody.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas, Cascadia Code, Courier New")
     $txtBody.FontSize = 11.5
     $txtBody.TextWrapping = [System.Windows.TextWrapping]::Wrap
@@ -3732,7 +3745,7 @@ function Add-ToolStartToGroup([string]$toolName, $Tab = $null) {
 
     $row = [System.Windows.Controls.TextBlock]::new()
     $row.Text = "  ⏳ ⚙️ [$toolName] — выполняется..."
-    $row.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E2C08D")
+    $row.Foreground = (Get-CachedBrush "#E2C08D" paper)
     $row.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
     $row.Tag = [DateTime]::UtcNow
     $g.BodyPanel.Children.Add($row) | Out-Null
@@ -3763,12 +3776,12 @@ function Add-ToolDoneToGroup([string]$toolName, [double]$duration, $Tab = $null)
     if ($g.PendingItems.ContainsKey($toolName)) {
         $row = $g.PendingItems[$toolName]
         $row.Text = "  ✔️ ⚙️ [$toolName] — выполнен за $duration сек"
-        $row.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4EC9B0")
+        $row.Foreground = (Get-CachedBrush "#4EC9B0" paper)
         $g.PendingItems.Remove($toolName)
     } else {
         $row = [System.Windows.Controls.TextBlock]::new()
         $row.Text = "  ✔️ ⚙️ [$toolName] — выполнен за $duration сек"
-        $row.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4EC9B0")
+        $row.Foreground = (Get-CachedBrush "#4EC9B0" paper)
         $row.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
         $g.BodyPanel.Children.Add($row) | Out-Null
     }
@@ -3784,7 +3797,7 @@ function Finalize-ActiveToolGroup($Tab = $null) {
         foreach ($k in @($g.PendingItems.Keys)) {
             $row = $g.PendingItems[$k]
             $row.Text = "  ✔️ ⚙️ [$k] — завершено"
-            $row.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#4EC9B0")
+            $row.Foreground = (Get-CachedBrush "#4EC9B0" paper)
             $g.ToolCount++
         }
         $g.PendingItems.Clear()
@@ -4302,7 +4315,7 @@ function Update-ContextDisplay {
     # 1. Графическая полоса прогресса (ProgressBar)
     if ($prgContext) {
         $prgContext.Value = [math]::Min(100.0, [math]::Max(0.0, [double]$stats.Percent))
-        $prgContext.Foreground = (Get-CachedBrush $stats.Color)
+        $prgContext.Foreground = (Get-CachedBrush $stats.Color metal)
     }
 
     # 2. Текстовый счетчик токенов (например: "107.9k / 1.0M")
@@ -4313,7 +4326,7 @@ function Update-ContextDisplay {
     # 3. Графический бейдж с процентом
     if ($txtContextPercent) {
         $txtContextPercent.Text = "$($stats.Percent)%"
-        $txtContextPercent.Foreground = (Get-CachedBrush $stats.Color)
+        $txtContextPercent.Foreground = (Get-CachedBrush $stats.Color metal)
     }
     if ($borderContextBadge) {
         $badgeBg = if ($stats.Percent -ge 80.0) {
@@ -4330,8 +4343,8 @@ function Update-ContextDisplay {
         } else {
             "#244B3F"
         }
-        $borderContextBadge.Background = (Get-CachedBrush $badgeBg)
-        $borderContextBadge.BorderBrush = (Get-CachedBrush $badgeBorder)
+        $borderContextBadge.Background = (Get-CachedBrush $badgeBg metal)
+        $borderContextBadge.BorderBrush = (Get-CachedBrush $badgeBorder metal)
     }
 
     # 4. Всплывающая подсказка для всего интерактивного виджета
@@ -4486,7 +4499,7 @@ function Show-ContextDetailsDialog {
 "@
 
     try {
-        $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
+        $sReader = [System.Xml.XmlNodeReader]::new((Convert-ThemeXaml ([xml]$dialogXaml) 'paper'))
         $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
         try {
             if ($OwnerWindow -and $OwnerWindow.IsVisible) {
@@ -4715,7 +4728,7 @@ function Set-LimitsSyncState {
         $txtLimitsIcon.Visibility = if ($IsSyncing) { [System.Windows.Visibility]::Collapsed } else { [System.Windows.Visibility]::Visible }
     }
     if ($borderLimitsWidget) {
-        $borderLimitsWidget.BorderBrush = if ($IsSyncing) { (Get-CachedBrush "#388BFD") } else { (Get-CachedBrush "#2D333B") }
+        $borderLimitsWidget.BorderBrush = if ($IsSyncing) { (Get-CachedBrush "#388BFD" metal) } else { (Get-CachedBrush "#2D333B" metal) }
     }
 }
 
@@ -5133,7 +5146,7 @@ function Update-LimitsDisplay {
     # 1. Полоса прогресса недельного остатка квоты
     if ($prgLimits) {
         $prgLimits.Value = $stats.WeeklyPercent
-        $prgLimits.Foreground = (Get-CachedBrush $stats.Color)
+        $prgLimits.Foreground = (Get-CachedBrush $stats.Color metal)
     }
 
     # 2. Текст времени сброса лимита (округление до дней и часов, без минут)
@@ -5162,11 +5175,11 @@ function Update-LimitsDisplay {
             "$([math]::Round($stats.WeeklyPercent))%"
         }
         $txtLimitsPercent.Text = $pctVal
-        $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color)
+        $txtLimitsPercent.Foreground = (Get-CachedBrush $stats.Color metal)
     }
     if ($borderLimitsBadge) {
-        $borderLimitsBadge.Background = (Get-CachedBrush $stats.BadgeBg)
-        $borderLimitsBadge.BorderBrush = (Get-CachedBrush $stats.BadgeBorder)
+        $borderLimitsBadge.Background = (Get-CachedBrush $stats.BadgeBg metal)
+        $borderLimitsBadge.BorderBrush = (Get-CachedBrush $stats.BadgeBorder metal)
     }
 
     # 4. Тултип
@@ -5180,12 +5193,12 @@ function Update-LimitsDisplay {
         if ($stats.IsApiBlocked) {
             if ($btnSend) { $btnSend.IsEnabled = $false }
             if ($txtStatus) { $txtStatus.Text = "⛔ Лимит API исчерпан (сброс через $($stats.ResetCountdown))" }
-            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149") }
+            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#F85149" metal) }
         } else {
             if ($btnSend) { $btnSend.IsEnabled = $true }
             if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
             if ($txtStatus) { $txtStatus.Text = "Готов к работе" }
-            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50") }
+            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal) }
         }
     }
 }
@@ -5204,15 +5217,15 @@ function Request-ManualQuotaRefresh {
         $txtLimitsSummary.Text = "Обновление..."
     }
     if ($borderLimitsBadge) {
-        $borderLimitsBadge.Background = (Get-CachedBrush "#3B2E1E")
-        $borderLimitsBadge.BorderBrush = (Get-CachedBrush "#FFA500")
+        $borderLimitsBadge.Background = (Get-CachedBrush "#3B2E1E" metal)
+        $borderLimitsBadge.BorderBrush = (Get-CachedBrush "#FFA500" metal)
     }
     if ($txtLimitsPercent) {
         $txtLimitsPercent.Text = "..."
-        $txtLimitsPercent.Foreground = (Get-CachedBrush "#FFA500")
+        $txtLimitsPercent.Foreground = (Get-CachedBrush "#FFA500" metal)
     }
     if ($statusDot) {
-        $statusDot.Fill = (Get-CachedBrush "#FFA500")
+        $statusDot.Fill = (Get-CachedBrush "#FFA500" metal)
     }
     if ($txtStatus) {
         $txtStatus.Text = "🔄 Принудительное обновление лимитов (F5)..."
@@ -5228,7 +5241,7 @@ function Request-ManualQuotaRefresh {
                 $txtStatus.Text = "✅ Лимиты успешно обновлены"
             }
             if ($statusDot) {
-                $statusDot.Fill = (Get-CachedBrush "#4CAF50")
+                $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal)
             }
         }
     })
@@ -5477,7 +5490,7 @@ function Show-UsageLimitsDialog {
 </Window>
 "@
 
-        $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
+        $sReader = [System.Xml.XmlNodeReader]::new((Convert-ThemeXaml ([xml]$dialogXaml) 'paper'))
         $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
         try {
             if ($OwnerWindow -and $OwnerWindow.IsVisible) {
@@ -6152,7 +6165,7 @@ function Populate-ConversationTranscriptToLog {
             $cardBorder.Background = (Get-CachedBrush "#202024")
             $cardBorder.BorderBrush = (Get-CachedBrush "#3E3E42")
             $cardBorder.BorderThickness = [System.Windows.Thickness]::new(1)
-            $cardBorder.CornerRadius = [System.Windows.CornerRadius]::new(4)
+            $cardBorder.CornerRadius = (New-ThemeCorner 4)
             $cardBorder.Padding = [System.Windows.Thickness]::new(12, 6, 12, 6)
             $cardBorder.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
             $cardBorder.Margin = [System.Windows.Thickness]::new(0, 4, 0, 8)
@@ -6313,11 +6326,11 @@ function Start-AsyncTranscriptLoad {
         Populate-ConversationTranscriptToLog -Turns @() -conversationId $conversationId -Document $Tab.Document -Tab $Tab
         $Tab.StatusText = [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d, \u0433\u043e\u0442\u043e\u0432 \u043a \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u044e")
         $Tab.StatusColor = "#4CAF50"
-        if ($Tab.HeaderDot) { $Tab.HeaderDot.Fill = (Get-CachedBrush "#4CAF50") }
+        if ($Tab.HeaderDot) { $Tab.HeaderDot.Fill = (Get-CachedBrush "#4CAF50" metal) }
         if ($Tab -eq $global:ActiveTab) {
             Hide-LoadingOverlay
             $txtStatus.Text = $Tab.StatusText
-            $statusDot.Fill = (Get-CachedBrush "#4CAF50")
+            $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal)
             Scroll-ChatLogToEnd
         }
         return
@@ -6394,7 +6407,7 @@ function Update-TabLoadingJobs {
                             $t.StatusText = [regex]::Unescape("\u0414\u0438\u0430\u043b\u043e\u0433 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d, \u0433\u043e\u0442\u043e\u0432 \u043a \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u044e")
                             $t.StatusColor = "#4CAF50"
                             if ($t.HeaderDot) {
-                                $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50")
+                                $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50" metal)
                             }
                         }
                     } catch {}
@@ -6403,7 +6416,7 @@ function Update-TabLoadingJobs {
                         Set-PerfStage "loadjob: Hide-LoadingOverlay/Scroll/ContextDisplay"
                         Hide-LoadingOverlay
                         $txtStatus.Text = $t.StatusText
-                        $statusDot.Fill = (Get-CachedBrush $t.StatusColor)
+                        $statusDot.Fill = (Get-CachedBrush $t.StatusColor metal)
                         Scroll-ChatLogToEnd
                         Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
                         Write-PerfLog "Загрузка диалога завершена, UI-часть выполнена; дальше раскладку и отрисовку делает WPF"
@@ -6477,11 +6490,11 @@ function Select-ConversationItem {
     $targetTab.StatusText = "Загрузка диалога..."
     $targetTab.StatusColor = "#FFA500"
     if ($targetTab.HeaderDot) {
-        $targetTab.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
+        $targetTab.HeaderDot.Fill = (Get-CachedBrush "#FFA500" metal)
     }
     if ($global:ActiveTab -eq $targetTab) {
         $txtStatus.Text = $targetTab.StatusText
-        $statusDot.Fill = (Get-CachedBrush "#FFA500")
+        $statusDot.Fill = (Get-CachedBrush "#FFA500" metal)
     }
 
     if (-not $global:IsSelectingFromCombo) {
@@ -6558,7 +6571,7 @@ function Reset-ToNewChat {
     $txtConversationId.Text = "Диалог: Новый"
     $txtConversationId.ToolTip = "Новая сессия"
     $txtStatus.Text = "Готов к работе (Новый диалог)"
-    $statusDot.Fill = (Get-CachedBrush "#4CAF50")
+    $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal)
     Update-ContextDisplay -conversationId $null
     Update-LimitsDisplay
 
@@ -6732,7 +6745,7 @@ function Show-RenameDialog {
 </Window>
 "@
 
-    $sReader = [System.Xml.XmlNodeReader]::new([xml]$dialogXaml)
+    $sReader = [System.Xml.XmlNodeReader]::new((Convert-ThemeXaml ([xml]$dialogXaml) 'paper'))
     $diag = [System.Windows.Markup.XamlReader]::Load($sReader)
     if ($OwnerWindow) {
         $diag.Owner = $OwnerWindow
@@ -6781,9 +6794,9 @@ function Refresh-ConversationsCombo {
         
         $newChatItem = [pscustomobject]@{
             DateStr   = "➕"
-            DateColor = "#4CAF50"
+            DateColor = (Convert-ThemeColor "#4CAF50" metal)
             ProjStr   = "[НОВЫЙ]"
-            ProjColor = "#81C784"
+            ProjColor = (Convert-ThemeColor "#81C784" metal)
             TitleStr  = "Начать диалог с чистого листа"
             Display   = "➕ [Новый диалог]"
             Tag       = $null
@@ -6802,9 +6815,9 @@ function Refresh-ConversationsCombo {
             
             $item = [pscustomobject]@{
                 DateStr   = $dateStr
-                DateColor = "#AAAAAA"
+                DateColor = (Convert-ThemeColor "#AAAAAA" metal)
                 ProjStr   = $projStr
-                ProjColor = "#4FC1FF"
+                ProjColor = (Convert-ThemeColor "#4FC1FF" metal)
                 TitleStr  = $c.Title
                 Display   = $disp
                 Tag       = $c.Id
@@ -6974,7 +6987,7 @@ function Show-ConversationSelectorWindow {
 </Window>
 "@
 
-    $sReader = [System.Xml.XmlNodeReader]::new([xml]$selectorXaml)
+    $sReader = [System.Xml.XmlNodeReader]::new((Convert-ThemeXaml ([xml]$selectorXaml) 'paper'))
     $dlg = [System.Windows.Markup.XamlReader]::Load($sReader)
     $dlg.Owner = $window
     if ($window.Icon) {
@@ -7312,7 +7325,7 @@ function Show-LazyConversationPlaceholder {
     $cardBorder.Background = (Get-CachedBrush "#252526")
     $cardBorder.BorderBrush = (Get-CachedBrush "#3E3E42")
     $cardBorder.BorderThickness = [System.Windows.Thickness]::new(1)
-    $cardBorder.CornerRadius = [System.Windows.CornerRadius]::new(6)
+    $cardBorder.CornerRadius = (New-ThemeCorner 6)
     $cardBorder.Padding = [System.Windows.Thickness]::new(20, 16, 20, 16)
     $cardBorder.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
     $cardBorder.MaxWidth = 550
@@ -7331,7 +7344,7 @@ function Show-LazyConversationPlaceholder {
 
     $btnLoad = [System.Windows.Controls.Button]::new()
     $btnLoad.Content = "📥 Загрузить диалог"
-    $btnLoad.Background = (Get-CachedBrush "#0E639C")
+    $btnLoad.Background = (Get-CachedBrush "#0E639C" metal)
     $btnLoad.Foreground = [System.Windows.Media.Brushes]::White
     $btnLoad.FontWeight = [System.Windows.FontWeights]::SemiBold
     $btnLoad.FontSize = [math]::Round($global:CurrentFontSize * 1.05)
@@ -7363,11 +7376,11 @@ function Load-TabConversation {
     $Tab.StatusText = "Загрузка диалога..."
     $Tab.StatusColor = "#FFA500"
     if ($Tab.HeaderDot) {
-        $Tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
+        $Tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500" metal)
     }
     if ($Tab -eq $global:ActiveTab) {
         $txtStatus.Text = "Загрузка диалога..."
-        $statusDot.Fill = (Get-CachedBrush "#FFA500")
+        $statusDot.Fill = (Get-CachedBrush "#FFA500" metal)
     }
 
     # Запускаем фоновую асинхронную загрузку истории транскрипта
@@ -7415,10 +7428,10 @@ function Finalize-TabStreamingBuffer($Tab) {
 
 function Create-TabHeaderUI($tab) {
     $headerBorder = [System.Windows.Controls.Border]::new()
-    $headerBorder.Background = (Get-CachedBrush "#252526")
-    $headerBorder.BorderBrush = (Get-CachedBrush "#2D2D30")
+    $headerBorder.Background = (Get-CachedBrush "#252526" metal)
+    $headerBorder.BorderBrush = (Get-CachedBrush "#2D2D30" metal)
     $headerBorder.BorderThickness = [System.Windows.Thickness]::new(1, 2, 1, 0)
-    $headerBorder.CornerRadius = [System.Windows.CornerRadius]::new(4, 4, 0, 0)
+    $headerBorder.CornerRadius = (New-ThemeCorner 4, 4, 0, 0)
     $headerBorder.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $headerBorder.Padding = [System.Windows.Thickness]::new(10, 6, 8, 6)
     $headerBorder.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -7431,7 +7444,7 @@ function Create-TabHeaderUI($tab) {
     $dot = [System.Windows.Shapes.Ellipse]::new()
     $dot.Width = 8
     $dot.Height = 8
-    $dot.Fill = (Get-CachedBrush $tab.StatusColor)
+    $dot.Fill = (Get-CachedBrush $tab.StatusColor metal)
     $dot.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
     $dot.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
     [System.Windows.Controls.DockPanel]::SetDock($dot, [System.Windows.Controls.Dock]::Left)
@@ -7440,7 +7453,7 @@ function Create-TabHeaderUI($tab) {
     # 2. Кнопка закрытия ✖
     $closeBtn = [System.Windows.Controls.Border]::new()
     $closeBtn.Background = [System.Windows.Media.Brushes]::Transparent
-    $closeBtn.CornerRadius = [System.Windows.CornerRadius]::new(3)
+    $closeBtn.CornerRadius = (New-ThemeCorner 3)
     $closeBtn.Width = 20
     $closeBtn.Height = 20
     $closeBtn.Margin = [System.Windows.Thickness]::new(6, 0, 0, 0)
@@ -7452,7 +7465,7 @@ function Create-TabHeaderUI($tab) {
     $closeTxt = [System.Windows.Controls.TextBlock]::new()
     $closeTxt.Text = "✖"
     $closeTxt.FontSize = 10
-    $closeTxt.Foreground = (Get-CachedBrush "#888888")
+    $closeTxt.Foreground = (Get-CachedBrush "#888888" metal)
     $closeTxt.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
     $closeTxt.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
     $closeTxt.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -7465,13 +7478,13 @@ function Create-TabHeaderUI($tab) {
 
     $closeBtn.Add_MouseEnter({
         param($s, $e)
-        if ($s) { $s.Background = (Get-CachedBrush "#C53030") }
+        if ($s) { $s.Background = (Get-CachedBrush "#C53030" metal) }
         if ($closeTxt) { $closeTxt.Foreground = [System.Windows.Media.Brushes]::White }
     }.GetNewClosure())
     $closeBtn.Add_MouseLeave({
         param($s, $e)
         if ($s) { $s.Background = [System.Windows.Media.Brushes]::Transparent }
-        if ($closeTxt) { $closeTxt.Foreground = (Get-CachedBrush "#888888") }
+        if ($closeTxt) { $closeTxt.Foreground = (Get-CachedBrush "#888888" metal) }
     }.GetNewClosure())
     $onCloseClick = {
         param($s, $e)
@@ -7491,7 +7504,7 @@ function Create-TabHeaderUI($tab) {
     $titleBlock = [System.Windows.Controls.TextBlock]::new()
     $titleBlock.Text = $targetTab.Title
     $titleBlock.FontSize = 12
-    $titleBlock.Foreground = (Get-CachedBrush "#CCCCCC")
+    $titleBlock.Foreground = (Get-CachedBrush "#CCCCCC" metal)
     $titleBlock.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
     $titleBlock.MaxWidth = 160
     $titleBlock.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
@@ -7571,12 +7584,12 @@ function Create-TabHeaderUI($tab) {
     # Наведение курсора
     $headerBorder.Add_MouseEnter({
         if ($global:ActiveTab -ne $targetTab) {
-            $headerBorder.Background = (Get-CachedBrush "#2D2D30")
+            $headerBorder.Background = (Get-CachedBrush "#2D2D30" metal)
         }
     }.GetNewClosure())
     $headerBorder.Add_MouseLeave({
         if ($global:ActiveTab -ne $targetTab) {
-            $headerBorder.Background = (Get-CachedBrush "#252526")
+            $headerBorder.Background = (Get-CachedBrush "#252526" metal)
         }
     }.GetNewClosure())
 
@@ -7591,18 +7604,18 @@ function Update-TabHeadersVisual {
     foreach ($t in $global:TabsList) {
         if (-not $t.HeaderBorder) { continue }
         if ($t -eq $global:ActiveTab) {
-            $t.HeaderBorder.Background = (Get-CachedBrush "#1E1E1E")
-            $t.HeaderBorder.BorderBrush = (Get-CachedBrush "#0E639C")
+            $t.HeaderBorder.Background = (Get-CachedBrush "#1E1E1E" metal)
+            $t.HeaderBorder.BorderBrush = (Get-CachedBrush "#0E639C" metal)
             $t.HeaderTitle.Foreground = [System.Windows.Media.Brushes]::White
             $t.HeaderTitle.FontWeight = [System.Windows.FontWeights]::SemiBold
         } else {
-            $t.HeaderBorder.Background = (Get-CachedBrush "#252526")
-            $t.HeaderBorder.BorderBrush = (Get-CachedBrush "#2D2D30")
-            $t.HeaderTitle.Foreground = (Get-CachedBrush "#969696")
+            $t.HeaderBorder.Background = (Get-CachedBrush "#252526" metal)
+            $t.HeaderBorder.BorderBrush = (Get-CachedBrush "#2D2D30" metal)
+            $t.HeaderTitle.Foreground = (Get-CachedBrush "#969696" metal)
             $t.HeaderTitle.FontWeight = [System.Windows.FontWeights]::Normal
         }
         if ($t.HeaderDot -and $t.StatusColor) {
-            $t.HeaderDot.Fill = (Get-CachedBrush $t.StatusColor)
+            $t.HeaderDot.Fill = (Get-CachedBrush $t.StatusColor metal)
         }
     }
 }
@@ -7668,7 +7681,7 @@ function Switch-ToTab {
     # Восстанавливаем статус-бар
     $txtStatus.Text = $Tab.StatusText
     if ($Tab.StatusColor) {
-        $statusDot.Fill = (Get-CachedBrush $Tab.StatusColor)
+        $statusDot.Fill = (Get-CachedBrush $Tab.StatusColor metal)
     }
     if ($Tab.ConversationId) {
         $shortId = if ($Tab.ConversationId.Length -gt 12) { $Tab.ConversationId.Substring(0, 12) + "..." } else { $Tab.ConversationId }
@@ -7692,11 +7705,11 @@ function Switch-ToTab {
     $btnStop.IsEnabled = $isRunning
     if ($isRunning) {
         $btnSend.Content = "В очередь ↵"
-        $btnSend.Background = (Get-CachedBrush "#B07010")
+        $btnSend.Background = (Get-CachedBrush "#B07010" metal)
         $btnSend.ToolTip = "Добавить сообщение в очередь (Enter или Alt+M)"
     } else {
         $btnSend.Content = "Отправить ↵"
-        $btnSend.Background = (Get-CachedBrush "#0E639C")
+        $btnSend.Background = (Get-CachedBrush "#0E639C" metal)
         $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
     }
 
@@ -8057,7 +8070,7 @@ $uiTimer.Add_Tick({
                 $tabItem.StatusText = "$($tabItem.ApiWarningText) ($timeStr)"
                 $tabItem.StatusColor = $tabItem.ApiWarningColor
                 if ($tabItem.HeaderDot) {
-                    $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.ApiWarningColor)
+                    $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.ApiWarningColor metal)
                 }
             } else {
                 $idleSec = if ($tabItem.SyncState.LastStreamActivityUtc -and $tabItem.SyncState.LastStreamActivityUtc -ne [DateTime]::MinValue) {
@@ -8079,7 +8092,7 @@ $uiTimer.Add_Tick({
                     $tabItem.StatusColor = "#FFA500"
                 }
                 if ($tabItem.HeaderDot) {
-                    $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.StatusColor)
+                    $tabItem.HeaderDot.Fill = (Get-CachedBrush $tabItem.StatusColor metal)
                 }
             }
         }
@@ -8087,7 +8100,7 @@ $uiTimer.Add_Tick({
     if ($global:ActiveTab -and $global:ActiveTab.SyncState -and $global:ActiveTab.SyncState.IsRunning) {
         $txtStatus.Text = $global:ActiveTab.StatusText
         $clr = if ($global:ActiveTab.StatusColor) { $global:ActiveTab.StatusColor } else { "#FFA500" }
-        $statusDot.Fill = (Get-CachedBrush $clr)
+        $statusDot.Fill = (Get-CachedBrush $clr metal)
     }
 
     Set-PerfStage "tick: очередь событий агента"
@@ -8160,13 +8173,13 @@ $uiTimer.Add_Tick({
                     if ($item.Color) {
                         $t.StatusColor = $item.Color
                         if ($t.HeaderDot) {
-                            $t.HeaderDot.Fill = (Get-CachedBrush $item.Color)
+                            $t.HeaderDot.Fill = (Get-CachedBrush $item.Color metal)
                         }
                     }
                     if ($t -eq $global:ActiveTab) {
                         $txtStatus.Text = $item.Text
                         if ($item.Color) {
-                            $statusDot.Fill = (Get-CachedBrush $item.Color)
+                            $statusDot.Fill = (Get-CachedBrush $item.Color metal)
                         }
                     }
                 }
@@ -8192,7 +8205,7 @@ $uiTimer.Add_Tick({
                     $t.StatusText = $doneText
                     $t.StatusColor = "#4CAF50"
                     if ($t.HeaderDot) {
-                        $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50")
+                        $t.HeaderDot.Fill = (Get-CachedBrush "#4CAF50" metal)
                     }
 
                     Finalize-TabStreamingBuffer -Tab $t
@@ -8229,11 +8242,11 @@ $uiTimer.Add_Tick({
                         if ($t -eq $global:ActiveTab) {
                             $btnSend.IsEnabled = $true
                             $btnSend.Content = "В очередь ↵"
-                            $btnSend.Background = (Get-CachedBrush "#B07010")
+                            $btnSend.Background = (Get-CachedBrush "#B07010" metal)
                             $btnSend.ToolTip = "Добавить сообщение в очередь (Enter или Alt+M)"
                             $btnStop.IsEnabled = $true
                             $txtPromptInput.IsEnabled = $true
-                            $statusDot.Fill = (Get-CachedBrush "#FFA500")
+                            $statusDot.Fill = (Get-CachedBrush "#FFA500" metal)
                             $qCount = $t.QueuedUserMessages.Count
                             $txtStatus.Text = if ($qCount -gt 0) { "Агент думает и выполняет задачи... (в очереди: $qCount)" } else { "Агент думает и выполняет задачи..." }
                             Scroll-ChatLogToEnd
@@ -8244,11 +8257,11 @@ $uiTimer.Add_Tick({
                         if ($t -eq $global:ActiveTab) {
                             $btnSend.IsEnabled = $true
                             $btnSend.Content = "Отправить ↵"
-                            $btnSend.Background = (Get-CachedBrush "#0E639C")
+                            $btnSend.Background = (Get-CachedBrush "#0E639C" metal)
                             $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
                             $btnStop.IsEnabled = $false
                             $txtPromptInput.IsEnabled = $true
-                            $statusDot.Fill = (Get-CachedBrush "#4CAF50")
+                            $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal)
                             $txtStatus.Text = $doneText
                             Scroll-ChatLogToEnd
                             $txtPromptInput.Focus() | Out-Null
@@ -8310,16 +8323,16 @@ $uiTimer.Add_Tick({
                         $t.StatusText = "⛔ Лимит API исчерпан"
                         $t.StatusColor = "#F85149"
                         if ($t.HeaderDot) {
-                            $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
+                            $t.HeaderDot.Fill = (Get-CachedBrush "#F85149" metal)
                         }
                         Append-ChatFormatted -Text "`r`n⛔ [ЛИМИТ ИСЧЕРПАН]: Квота API превышена ($tGrp). Отправка заблокирована (сброс через $resetsInStr, ($($blockUntil.ToString('dd.MM HH:mm')))).$([Environment]::NewLine)$errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
                         if ($t -eq $global:ActiveTab) {
                             $btnSend.IsEnabled = $false
                             $btnSend.Content = "Отправить ↵"
-                            $btnSend.Background = (Get-CachedBrush "#0E639C")
+                            $btnSend.Background = (Get-CachedBrush "#0E639C" metal)
                             $btnStop.IsEnabled = $false
                             $txtPromptInput.IsEnabled = $false
-                            $statusDot.Fill = (Get-CachedBrush "#F85149")
+                            $statusDot.Fill = (Get-CachedBrush "#F85149" metal)
                             $txtStatus.Text = "⛔ Лимит API исчерпан"
                             Scroll-ChatLogToEnd
                         }
@@ -8334,17 +8347,17 @@ $uiTimer.Add_Tick({
                             $t.StatusText = "⚠️ Дефицит мощностей Google (503)"
                             $t.StatusColor = "#E2C08D"
                             if ($t.HeaderDot) {
-                                $t.HeaderDot.Fill = (Get-CachedBrush "#E2C08D")
+                                $t.HeaderDot.Fill = (Get-CachedBrush "#E2C08D" metal)
                             }
                             Append-ChatFormatted -Text "`r`n⚠️ [СЕРВЕРЫ GOOGLE ПЕРЕГРУЖЕНЫ (503 No Capacity)]: Бэкенд Google временно не имеет свободных мощностей для модели '$($t.Model)'.`r`n💡 Решение: Переключите модель в выпадающем списке сверху на 'gemini-3.8-flash' (без High) или 'gemini-pro'.`r`n`r`n" -Color "#E2C08D" -Bold -Document $t.Document
                             if ($t -eq $global:ActiveTab) {
                                 $btnSend.IsEnabled = $true
                                 $btnSend.Content = "Отправить ↵"
-                                $btnSend.Background = (Get-CachedBrush "#0E639C")
+                                $btnSend.Background = (Get-CachedBrush "#0E639C" metal)
                                 $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
                                 $btnStop.IsEnabled = $false
                                 $txtPromptInput.IsEnabled = $true
-                                $statusDot.Fill = (Get-CachedBrush "#E2C08D")
+                                $statusDot.Fill = (Get-CachedBrush "#E2C08D" metal)
                                 $txtStatus.Text = "⚠️ Дефицит мощностей Google (503 No Capacity)"
                                 Scroll-ChatLogToEnd
                             }
@@ -8357,17 +8370,17 @@ $uiTimer.Add_Tick({
                             $t.StatusText = "Ошибка выполнения"
                             $t.StatusColor = "#F85149"
                             if ($t.HeaderDot) {
-                                $t.HeaderDot.Fill = (Get-CachedBrush "#F85149")
+                                $t.HeaderDot.Fill = (Get-CachedBrush "#F85149" metal)
                             }
                             Append-ChatFormatted -Text "`r`n❌ [ОШИБКА]: $errMsg`r`n`r`n" -Color "#F85149" -Bold -Document $t.Document
                             if ($t -eq $global:ActiveTab) {
                                 $btnSend.IsEnabled = $true
                                 $btnSend.Content = "Отправить ↵"
-                                $btnSend.Background = (Get-CachedBrush "#0E639C")
+                                $btnSend.Background = (Get-CachedBrush "#0E639C" metal)
                                 $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
                                 $btnStop.IsEnabled = $false
                                 $txtPromptInput.IsEnabled = $true
-                                $statusDot.Fill = (Get-CachedBrush "#F85149")
+                                $statusDot.Fill = (Get-CachedBrush "#F85149" metal)
                                 $txtStatus.Text = "Ошибка выполнения"
                                 Scroll-ChatLogToEnd
                             }
@@ -8455,12 +8468,12 @@ $txtConversationId.Add_MouseDown({
 # Интерактивный графический виджет контекста: ховер-эффект и вызов диалога подробного анализа
 if ($borderContextWidget) {
     $borderContextWidget.Add_MouseEnter({
-        $borderContextWidget.Background = (Get-CachedBrush "#262C36")
-        $borderContextWidget.BorderBrush = (Get-CachedBrush "#3B4452")
+        $borderContextWidget.Background = (Get-CachedBrush "#262C36" metal)
+        $borderContextWidget.BorderBrush = (Get-CachedBrush "#3B4452" metal)
     })
     $borderContextWidget.Add_MouseLeave({
-        $borderContextWidget.Background = (Get-CachedBrush "#1C1F26")
-        $borderContextWidget.BorderBrush = (Get-CachedBrush "#2D333B")
+        $borderContextWidget.Background = (Get-CachedBrush "#1C1F26" metal)
+        $borderContextWidget.BorderBrush = (Get-CachedBrush "#2D333B" metal)
     })
     $borderContextWidget.Add_MouseDown({
         param($sender, $e)
@@ -8473,12 +8486,12 @@ if ($borderContextWidget) {
 # Интерактивный графический виджет лимитов использования: ховер-эффект и вызов модального дашборда
 if ($borderLimitsWidget) {
     $borderLimitsWidget.Add_MouseEnter({
-        $borderLimitsWidget.Background = (Get-CachedBrush "#262C36")
-        $borderLimitsWidget.BorderBrush = (Get-CachedBrush "#3B4452")
+        $borderLimitsWidget.Background = (Get-CachedBrush "#262C36" metal)
+        $borderLimitsWidget.BorderBrush = (Get-CachedBrush "#3B4452" metal)
     })
     $borderLimitsWidget.Add_MouseLeave({
-        $borderLimitsWidget.Background = (Get-CachedBrush "#1C1F26")
-        $borderLimitsWidget.BorderBrush = (Get-CachedBrush "#2D333B")
+        $borderLimitsWidget.Background = (Get-CachedBrush "#1C1F26" metal)
+        $borderLimitsWidget.BorderBrush = (Get-CachedBrush "#2D333B" metal)
     })
     $borderLimitsWidget.Add_MouseDown({
         param($sender, $e)
@@ -8704,6 +8717,47 @@ $btnSwitchAccount.Add_Click({
 })
 Update-AccountButtonText
 
+# --- Выбор темы: тёмная или игровая «Пустошь» (GameTheme.ps1) ---
+# Цвета темы проставляются при загрузке окна, поэтому новая тема включается перезапуском лаунчера.
+$btnTheme = $window.FindName("BtnTheme")
+
+function Invoke-ThemeChange([string]$Name) {
+    # Возврат к теме, в которой окно уже открыто, перезапуска не требует: надо только записать выбор
+    if ($Name -eq $global:LauncherTheme) {
+        $global:LauncherThemeChosen = $Name
+        Save-LauncherConfig
+        return
+    }
+    $running = @($global:TabsList | Where-Object { $_.SyncState -and $_.SyncState.IsRunning })
+    $question = "Тема сменится после перезапуска лаунчера. Вкладки и диалоги сохранятся."
+    if ($running.Count -gt 0) { $question += "`r`n`r`nСейчас агент работает во вкладках: $($running.Count). Перезапуск остановит их запросы." }
+    $question += "`r`n`r`nПерезапустить сейчас?"
+    $answer = [System.Windows.MessageBox]::Show($question, "Тема оформления", [System.Windows.MessageBoxButton]::YesNoCancel, [System.Windows.MessageBoxImage]::Question)
+    if ($answer -eq [System.Windows.MessageBoxResult]::Cancel) { return }
+    $global:LauncherThemeChosen = $Name
+    Save-LauncherConfig
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    # Новый лаунчер запускается так же, как из Start-Launcher.bat
+    $self = Join-Path $launcherDir "AntigravityGUI.ps1"
+    Start-Process powershell.exe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", "`"$self`"")
+    $window.Close()
+}
+
+$btnTheme.Add_Click({
+    $menu = [System.Windows.Controls.ContextMenu]::new()
+    $current = if ($global:LauncherThemeChosen) { $global:LauncherThemeChosen } else { $global:LauncherTheme }
+    foreach ($t in @(@('dark', 'Тёмная'), @('game', 'Игровая: пустошь'))) {
+        $mi = [System.Windows.Controls.MenuItem]::new()
+        $mi.Header = if ($t[0] -eq $current) { "✔ $($t[1])" } else { "     $($t[1])" }
+        $mi.Tag = $t[0]
+        $mi.Add_Click({ param($s, $ev) Invoke-ThemeChange ([string]$s.Tag) })
+        [void]$menu.Items.Add($mi)
+    }
+    $menu.PlacementTarget = $btnTheme
+    $menu.Placement = [System.Windows.Controls.Primitives.PlacementMode]::Top
+    $menu.IsOpen = $true
+})
+
 # Остановка выполнения
 $btnStop.Add_Click({
     $tab = $global:ActiveTab
@@ -8795,7 +8849,7 @@ function Start-AgentExecutionJob {
     $Tab.StatusText = "Агент думает и выполняет задачи..."
     $Tab.StatusColor = "#FFA500"
     if ($Tab.HeaderDot) {
-        $Tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
+        $Tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500" metal)
     }
 
     # Номер запуска: события и флаги от задачи прошлого запуска не должны задевать этот ход
@@ -9155,11 +9209,11 @@ function Send-AgentPrompt {
         Clear-AttachedImages
         $btnSend.IsEnabled = $true
         $btnSend.Content = "В очередь ↵"
-        $btnSend.Background = (Get-CachedBrush "#B07010")
+        $btnSend.Background = (Get-CachedBrush "#B07010" metal)
         $btnSend.ToolTip = "Добавить сообщение в очередь (Enter или Alt+M)"
         $btnStop.IsEnabled = $true
         $txtPromptInput.IsEnabled = $true
-        $statusDot.Fill = (Get-CachedBrush "#FFA500")
+        $statusDot.Fill = (Get-CachedBrush "#FFA500" metal)
         $txtStatus.Text = "Агент думает и выполняет задачи..."
         $txtPromptInput.Focus() | Out-Null
     }
@@ -9262,8 +9316,8 @@ if ($btnSelectionCopy) {
         }
         if ($popSelectionMenu) { $popSelectionMenu.IsOpen = $false }
     })
-    $btnSelectionCopy.Add_MouseEnter({ $btnSelectionCopy.Background = (Get-CachedBrush "#333336") })
-    $btnSelectionCopy.Add_MouseLeave({ $btnSelectionCopy.Background = (Get-CachedBrush "#252526") })
+    $btnSelectionCopy.Add_MouseEnter({ $btnSelectionCopy.Background = (Get-CachedBrush "#333336" metal) })
+    $btnSelectionCopy.Add_MouseLeave({ $btnSelectionCopy.Background = (Get-CachedBrush "#252526" metal) })
 }
 
 if ($btnSelectionReply) {
@@ -9273,8 +9327,8 @@ if ($btnSelectionReply) {
             Set-ActiveQuote -QuoteText $global:PendingSelectionText
         }
     })
-    $btnSelectionReply.Add_MouseEnter({ $btnSelectionReply.Background = (Get-CachedBrush "#263554") })
-    $btnSelectionReply.Add_MouseLeave({ $btnSelectionReply.Background = (Get-CachedBrush "#1E2638") })
+    $btnSelectionReply.Add_MouseEnter({ $btnSelectionReply.Background = (Get-CachedBrush "#263554" metal) })
+    $btnSelectionReply.Add_MouseLeave({ $btnSelectionReply.Background = (Get-CachedBrush "#1E2638" metal) })
 }
 
 if ($btnCancelQuoteReply) {
