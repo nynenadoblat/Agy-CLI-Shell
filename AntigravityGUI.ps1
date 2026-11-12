@@ -8056,6 +8056,7 @@ $uiTimer.Add_Tick({
                                         if (-not $alreadyPresent) {
                                             Append-MarkdownFormatted -Text $finalText -Document $tabItem.Document -BaseColor "#D4D4D4"
                                         }
+                                        $tabItem.SyncState.TurnGotText = $true
 
                                         $tabItem.SyncState.Queue.Enqueue([pscustomobject]@{ RunId = $tabItem.SyncState.RunId; Type = "done" })
                                     }
@@ -8113,6 +8114,7 @@ $uiTimer.Add_Tick({
             switch ($item.Type) {
                 "token" {
                     $t.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
+                    if (-not [string]::IsNullOrWhiteSpace($item.Text)) { $t.SyncState.TurnGotText = $true }
                     $t.ApiWarningText = $null
                     $t.ApiWarningColor = $null
                     Finalize-ActiveToolGroup -Tab $t
@@ -8209,6 +8211,12 @@ $uiTimer.Add_Tick({
                     }
 
                     Finalize-TabStreamingBuffer -Tab $t
+
+                    # agy может закрыть ход без текста ответа: например, сразу после сообщения о конце фоновой задачи.
+                    # Тогда в чате было бы одно время ответа. Остановку кнопкой «Стоп» это не касается.
+                    if (-not $t.SyncState.TurnGotText -and -not $t.SyncState.StopRequested) {
+                        Append-ChatFormatted -Text "`r`n⚠️ agy закрыл ход без текста ответа: модель ничего не написала после последнего шага. Напишите «продолжай», и модель ответит.`r`n" -Color "#E2C08D" -Document $t.Document
+                    }
 
                     if ($null -ne $doneSec) {
                         $realTimeStr = if ($doneSec -ge 60) {
@@ -8857,6 +8865,8 @@ function Start-AgentExecutionJob {
     $Tab.SyncState.IsRunning = $true
     $Tab.SyncState.StopRequested = $false
     $Tab.SyncState.TurnResolvedByWatchdog = $false
+    # TurnGotText: пришёл ли за этот ход текст ответа модели. Без текста событие done пишет в чат предупреждение
+    $Tab.SyncState.TurnGotText = $false
     $Tab.SyncState.ProcessId = 0
     $Tab.SyncState.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $Tab.SyncState.TurnStartTimeUtc = [DateTime]::UtcNow
