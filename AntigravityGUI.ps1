@@ -230,7 +230,7 @@ if (-not (Test-Path $defaultAgyPath)) {
         </Style>
     </Window.Resources>
 
-    <Grid Margin="16">
+    <Grid Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Верхняя панель настроек (Row 0) -->
             <RowDefinition Height="Auto"/> <!-- Панель вкладок диалогов (Row 1) -->
@@ -239,58 +239,48 @@ if (-not (Test-Path $defaultAgyPath)) {
             <RowDefinition Height="Auto"/> <!-- Статус бар (Row 4) -->
         </Grid.RowDefinitions>
 
-        <!-- ВЕРХНЯЯ ПАНЕЛЬ -->
-        <Border x:Name="BorderTopPanel" Grid.Row="0" Background="#202020" BorderBrush="#2D2D30" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
+        <!-- ВЕРХНЯЯ ПАНЕЛЬ: две строки, чтобы чату досталось больше места -->
+        <Border x:Name="BorderTopPanel" Grid.Row="0" Background="#202020" BorderBrush="#2D2D30" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,0,0,6">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="8"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="8"/>
+                    <RowDefinition Height="6"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Строка 1: Рабочая папка -->
+                <!-- Строка 1: рабочая папка, проект, модель, режим и автоподтверждение -->
                 <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*" MinWidth="60"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="220"/>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="155"/>
+                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="90"/>
+                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Column="0" Text="Рабочая папка:" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="SemiBold"/>
-                    <TextBox x:Name="TxtWorkspace" Grid.Column="1" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <Button x:Name="BtnBrowseWorkspace" Grid.Column="2" Content="Обзор..." Margin="0,0,8,0" MinWidth="75"/>
-                    <ComboBox x:Name="CmbProjects" Grid.Column="3" ToolTip="Быстрый выбор проекта из корневой папки проектов"/>
+                    <TextBlock Grid.Column="0" Text="Папка:" VerticalAlignment="Center" Margin="0,0,6,0" FontWeight="SemiBold"/>
+                    <TextBox x:Name="TxtWorkspace" Grid.Column="1" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Button x:Name="BtnBrowseWorkspace" Grid.Column="2" Content="Обзор..." Padding="8,3" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="CmbProjects" Grid.Column="3" VerticalAlignment="Center" ToolTip="Быстрый выбор проекта из корневой папки проектов"/>
+
+                    <TextBlock Grid.Column="5" Text="Модель:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="CmbModel" Grid.Column="6" VerticalAlignment="Center"/>
+
+                    <TextBlock Grid.Column="8" Text="Режим:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="CmbMode" Grid.Column="9" VerticalAlignment="Center"/>
+
+                    <CheckBox x:Name="ChkSkipPerms" Grid.Column="11" Content="Автоподтверждение" IsChecked="True" VerticalAlignment="Center" ToolTip="Агент выполняет действия без вопросов (--dangerously-skip-permissions)"/>
                 </Grid>
 
-                <!-- Строка 2: Настройки модели, режима и параметров -->
+                <!-- Строка 2: Разговоры и управление сессией -->
                 <Grid Grid.Row="2">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="200"/>
-                        <ColumnDefinition Width="14"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="110"/>
-                        <ColumnDefinition Width="16"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <!-- Модель -->
-                    <TextBlock Grid.Column="0" Text="Модель:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="CmbModel" Grid.Column="1" VerticalAlignment="Center"/>
-
-                    <!-- Режим -->
-                    <TextBlock Grid.Column="3" Text="Режим:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="CmbMode" Grid.Column="4" VerticalAlignment="Center"/>
-
-                    <!-- Чекбокс прав -->
-                    <CheckBox x:Name="ChkSkipPerms" Grid.Column="6" Content="Авто-подтверждение (--dangerously-skip-permissions)" IsChecked="True" VerticalAlignment="Center"/>
-                </Grid>
-
-                <!-- Строка 3: Разговоры и управление сессией -->
-                <Grid Grid.Row="4">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
@@ -335,7 +325,7 @@ if (-not (Test-Path $defaultAgyPath)) {
         </Border>
 
         <!-- ЦЕНТРАЛЬНОЕ ОКНО ЧАТА -->
-        <Border x:Name="BorderChat" Theme="paper" Grid.Row="2" Background="#1E1E1E" BorderBrush="#2D2D30" BorderThickness="1,0,1,1" CornerRadius="0,0,6,6" Margin="0,0,0,12">
+        <Border x:Name="BorderChat" Theme="paper" Grid.Row="2" Background="#1E1E1E" BorderBrush="#2D2D30" BorderThickness="1,0,1,1" CornerRadius="0,0,6,6" Margin="0,0,0,6">
             <Grid>
                 <RichTextBox x:Name="TxtChatLog"
                              Background="#1E1E1E"
@@ -401,7 +391,7 @@ if (-not (Test-Path $defaultAgyPath)) {
         </Border>
 
         <!-- НИЖНЯЯ ПАНЕЛЬ ВВОДА И ВЛОЖЕНИЙ -->
-        <Grid Grid.Row="3" Margin="0,0,0,8">
+        <Grid Grid.Row="3" Margin="0,0,0,6">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/> <!-- Панель прикрепленных картинок/файлов -->
                 <RowDefinition Height="Auto"/> <!-- Поле ввода и кнопки действий -->
