@@ -36,6 +36,10 @@ function Read-LauncherThemeName {
 
 $global:LauncherThemeReadError = $null
 $global:LauncherTheme = Read-LauncherThemeName
+
+# Толщина обычного текста. ClaudeWin пишет игровую тему шрифтом Inter толщины 500, а Inter в Windows нет.
+# Поэтому игровая тема берёт полужирный Segoe UI (seguisb.ttf): обычный Segoe UI и Consolas на бумаге выглядят тонкими.
+$global:ThemeTextWeight = if ($global:LauncherTheme -eq 'game') { [System.Windows.FontWeights]::SemiBold } else { [System.Windows.FontWeights]::Normal }
 $global:ThemeColorCache = @{}
 
 function ConvertTo-ThemeHls([double]$r, [double]$g, [double]$b) {
@@ -241,6 +245,10 @@ function Convert-ThemeXaml([xml]$Xaml, [string]$Kind = 'paper') {
 
     Convert-ThemeXamlNode $root $Kind
 
+    # Плотный текст: полужирный шрифт и отрисовка по пикселям экрана (Display), а не сглаженная тонкая (Ideal)
+    if (-not $root.HasAttribute('FontWeight')) { $root.SetAttribute('FontWeight', 'SemiBold') }
+    $root.SetAttribute('TextOptions.TextFormattingMode', 'Display')
+
     # Шаблон плашки - во все неявные стили кнопок. В окне без такого стиля функция его создаёт.
     $styles = @($Xaml.GetElementsByTagName('Style', $ns) | Where-Object { $_.GetAttribute('TargetType') -match '^(\{x:Type )?Button\}?$' -and -not $_.HasAttribute('Key', 'http://schemas.microsoft.com/winfx/2006/xaml') })
     if ($styles.Count -eq 0) {
@@ -329,7 +337,10 @@ function Set-GameThemeSurfaces($Window) {
     $chat.Background = New-ThemeTextureBrush $script:ThemePaper 'paper'
     $chat.BorderBrush = $rust
     $chat.BorderThickness = [System.Windows.Thickness]::new(3, 0, 3, 3)
-    $Window.FindName('TxtChatLog').Background = [System.Windows.Media.Brushes]::Transparent
+    # Текст чата - Segoe UI, как Inter в ClaudeWin. Блоки кода задают себе Consolas сами.
+    $chatLog = $Window.FindName('TxtChatLog')
+    $chatLog.Background = [System.Windows.Media.Brushes]::Transparent
+    $chatLog.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe UI')
     $prompt = $Window.FindName('TxtPromptInput')
     $prompt.Background = New-ThemeTextureBrush $script:ThemePaper 'paper'
     $prompt.BorderBrush = $rust

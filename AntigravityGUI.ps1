@@ -2609,7 +2609,8 @@ function Append-ChatFormatted {
     if ($Bold) {
         $tr.ApplyPropertyValue([System.Windows.Documents.TextElement]::FontWeightProperty, [System.Windows.FontWeights]::Bold)
     } else {
-        $tr.ApplyPropertyValue([System.Windows.Documents.TextElement]::FontWeightProperty, [System.Windows.FontWeights]::Normal)
+        # Обычная толщина зависит от темы (GameTheme.ps1): в игровой теме текст полужирный
+        $tr.ApplyPropertyValue([System.Windows.Documents.TextElement]::FontWeightProperty, $global:ThemeTextWeight)
     }
 }
 
