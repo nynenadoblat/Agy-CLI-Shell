@@ -7224,6 +7224,7 @@ function New-TabSession {
         IsRunning             = $false
         StopRequested         = $false
         ProcessId             = 0
+        RunId                 = 0
         Stopwatch             = $null
         TurnStartTimeUtc      = [DateTime]::MinValue
         LastStreamActivityUtc = [DateTime]::MinValue
@@ -7997,16 +7998,18 @@ $uiTimer.Add_Tick({
                             # 2. Disk-Reconciliation Watchdog: детекция завершения хода на диске
                             $tailLines = $tail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                             $foundDoneStep = $null
+                            # Смотрим только последний PLANNER_RESPONSE: ход закончен, если в нём есть текст и нет вызовов инструментов.
+                            # Шаг с текстом и вызовом инструмента (например, "запустил тест, жду") - это середина хода.
                             for ($li = $tailLines.Count - 1; $li -ge 0; $li--) {
                                 $curLine = $tailLines[$li]
-                                if ($curLine.Contains('"type":"PLANNER_RESPONSE"') -and $curLine.Contains('"status":"DONE"')) {
+                                if ($curLine.Contains('"type":"PLANNER_RESPONSE"')) {
                                     try {
                                         $parsed = ConvertFrom-Json -InputObject $curLine
-                                        if ($parsed.type -eq "PLANNER_RESPONSE" -and $parsed.status -eq "DONE" -and $parsed.content) {
+                                        if ($parsed.status -eq "DONE" -and $parsed.content -and -not $parsed.tool_calls) {
                                             $foundDoneStep = $parsed
-                                            break
                                         }
                                     } catch {}
+                                    break
                                 }
                             }
 
@@ -8027,22 +8030,21 @@ $uiTimer.Add_Tick({
                                             Stop-ProcessTree -processId $tabItem.SyncState.ProcessId
                                         }
 
+                                        # Текст из потока запоминаем до Finalize-TabStreamingBuffer: она очищает StreamBuffer
+                                        $finalText = $foundDoneStep.content
+                                        $streamedSoFar = if ($tabItem.StreamBuffer) { $tabItem.StreamBuffer.ToString() } else { "" }
+                                        $sample = if ($finalText.Length -gt 60) { $finalText.Substring(0, 60) } else { $finalText }
+                                        $alreadyPresent = $streamedSoFar.Contains($sample)
+
                                         Finalize-ActiveToolGroup -Tab $tabItem
                                         Finalize-TabStreamingBuffer -Tab $tabItem
 
-                                        $finalText = $foundDoneStep.content
-                                        $alreadyPresent = $false
-                                        if ($tabItem.StreamBuffer -and $tabItem.StreamBuffer.Length -gt 0) {
-                                            $sample = if ($finalText.Length -gt 60) { $finalText.Substring(0, 60) } else { $finalText }
-                                            if ($tabItem.StreamBuffer.ToString().Contains($sample)) {
-                                                $alreadyPresent = $true
-                                            }
-                                        }
+                                        # Заголовок [Antigravity] уже вывел Append-AgentHeader при старте хода; текст рисуем через Markdown, как обычный ответ
                                         if (-not $alreadyPresent) {
-                                            Append-ChatFormatted -Text "`r`n[Antigravity]: $finalText`r`n" -Color "#D4D4D4" -Document $tabItem.Document
+                                            Append-MarkdownFormatted -Text $finalText -Document $tabItem.Document -BaseColor "#D4D4D4"
                                         }
 
-                                        $tabItem.SyncState.Queue.Enqueue([pscustomobject]@{ Type = "done" })
+                                        $tabItem.SyncState.Queue.Enqueue([pscustomobject]@{ RunId = $tabItem.SyncState.RunId; Type = "done" })
                                     }
                                 }
                             }
@@ -8093,6 +8095,8 @@ $uiTimer.Add_Tick({
         $item = $null
         if (-not $t.SyncState -or -not $t.SyncState.Queue) { continue }
         while ($t.SyncState.Queue.TryDequeue([ref]$item)) {
+            # Событие от задачи прошлого запуска (её процесс убил Watchdog, а уже стартовал следующий ход) выбрасываем
+            if ($null -ne $item.RunId -and $item.RunId -ne $t.SyncState.RunId) { continue }
             switch ($item.Type) {
                 "token" {
                     $t.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
@@ -8252,8 +8256,9 @@ $uiTimer.Add_Tick({
                     }
                 }
                 "error" {
-                    # Игнорируем запоздалые события ошибки, если ход уже завершён или закрыт Watchdog'ом
-                    if (-not $t.SyncState.IsRunning -or $t.SyncState.TurnResolvedByWatchdog) {
+                    # Игнорируем запоздалую ошибку убитого процесса, если ход уже закрыл Watchdog.
+                    # IsRunning здесь не проверяем: задача сбрасывает его в finally раньше, чем таймер заберёт ошибку из очереди.
+                    if ($t.SyncState.TurnResolvedByWatchdog) {
                         continue
                     }
 
@@ -8793,6 +8798,8 @@ function Start-AgentExecutionJob {
         $Tab.HeaderDot.Fill = (Get-CachedBrush "#FFA500")
     }
 
+    # Номер запуска: события и флаги от задачи прошлого запуска не должны задевать этот ход
+    $Tab.SyncState.RunId = [int]$Tab.SyncState.RunId + 1
     $Tab.SyncState.IsRunning = $true
     $Tab.SyncState.StopRequested = $false
     $Tab.SyncState.TurnResolvedByWatchdog = $false
@@ -8814,6 +8821,7 @@ function Start-AgentExecutionJob {
         SkipPerms       = $SkipPerms
         ConversationId  = $ConversationId
         SyncState       = $Tab.SyncState
+        RunId           = $Tab.SyncState.RunId
     })
 
     $rs = [runspacefactory]::CreateRunspace()
@@ -8824,6 +8832,7 @@ function Start-AgentExecutionJob {
     $ps.Runspace = $rs
     $ps.AddScript({
         $st = $jobData.SyncState
+        $myRun = $jobData.RunId
         try {
             $escapedPrompt = $jobData.Prompt.Replace('\', '\\').Replace('"', '\"')
 
@@ -8866,7 +8875,7 @@ function Start-AgentExecutionJob {
             $reader = $proc.StandardOutput
 
             while (-not $proc.HasExited -or -not $reader.EndOfStream) {
-                if ($st.StopRequested) { break }
+                if ($st.StopRequested -or $st.RunId -ne $myRun) { break }
                 $readTask = $reader.ReadLineAsync()
                 while (-not $readTask.Wait(400)) {
                     if ($st.StopRequested) { break }
@@ -8887,32 +8896,32 @@ function Start-AgentExecutionJob {
                         switch ($evt.event) {
                             "init" {
                                 if ($evt.conversation_id) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.conversation_id })
+                                    $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "conversation_id"; Id = $evt.conversation_id })
                                 }
                             }
                             "step_update" {
                                 $su = $evt.step_update
                                 if ($su.step_type -eq "agent_response" -and $su.text_delta) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $su.text_delta })
+                                    $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "token"; Text = $su.text_delta })
                                 }
                                 elseif ($su.step_type -eq "tool") {
                                     if ($su.state -eq "ACTIVE") {
-                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "tool_start"; Name = $su.tool_name })
+                                        $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "tool_start"; Name = $su.tool_name })
                                     } elseif ($su.state -eq "DONE") {
                                         $dur = [math]::Round([double]$su.duration_seconds, 2)
-                                        $st.Queue.Enqueue([pscustomobject]@{ Type = "tool_done"; Name = $su.tool_name; Duration = $dur })
+                                        $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "tool_done"; Name = $su.tool_name; Duration = $dur })
                                     }
                                 }
                             }
                             "result" {
                                 $turnFinished = $true
                                 if ($evt.result -and $evt.result.conversation_id) {
-                                    $st.Queue.Enqueue([pscustomobject]@{ Type = "conversation_id"; Id = $evt.result.conversation_id })
+                                    $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "conversation_id"; Id = $evt.result.conversation_id })
                                 }
                             }
                         }
                     } catch {
-                        $st.Queue.Enqueue([pscustomobject]@{ Type = "token"; Text = $line })
+                        $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "token"; Text = $line })
                     }
                 }
             }
@@ -8939,7 +8948,7 @@ function Start-AgentExecutionJob {
             if ($st.StopRequested -or $st.TurnResolvedByWatchdog) {
                 # Остановлено пользователем или завершено Watchdog'ом — не генерируем ложных ошибок
             } elseif ($turnFinished) {
-                $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
+                $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "done" })
             } else {
                 # Фильтруем некритические предупреждения CLI (песочница Windows, gRPC и т.д.)
                 $realErrors = @()
@@ -8954,15 +8963,16 @@ function Start-AgentExecutionJob {
                 }
 
                 if ($realErrors.Count -gt 0 -and $proc.ExitCode -ne 0) {
-                    $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = ($realErrors -join "`r`n") })
+                    $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "error"; Message = ($realErrors -join "`r`n") })
                 } else {
-                    $st.Queue.Enqueue([pscustomobject]@{ Type = "done" })
+                    $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "done" })
                 }
             }
         } catch {
-            $st.Queue.Enqueue([pscustomobject]@{ Type = "error"; Message = $_.ToString() })
+            $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "error"; Message = $_.ToString() })
         } finally {
-            $st.IsRunning = $false
+            # Флаг сбрасывает только задача текущего запуска, иначе старая задача погасит уже начатый следующий ход
+            if ($st.RunId -eq $myRun) { $st.IsRunning = $false }
         }
     }) | Out-Null
 
