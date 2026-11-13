@@ -3165,9 +3165,15 @@ function Append-UserMessageToLog {
     $firstLine = if ($lines.Length -gt 0) { $lines[0] } else { "" }
 
     $p = [System.Windows.Documents.Paragraph]::new()
-    $p.Margin = [System.Windows.Thickness]::new(0, 8, 0, 4)
+    $p.Margin = [System.Windows.Thickness]::new(0, 14, 0, 6)
     $p.LineHeight = $calcLineHeight
     $p.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
+    # Сообщение автора - плашка в рамке со своим фоном и толстой полосой слева, чтобы не сливаться с ответом агента.
+    # Рамка со всех сторон отличает плашку от цитаты в ответе: у цитаты только полоса слева.
+    $p.Background = Get-CachedBrush "#1F2D40"
+    $p.BorderBrush = Get-CachedBrush "#388BFD"
+    $p.BorderThickness = [System.Windows.Thickness]::new(4, 1, 1, 1)
+    $p.Padding = [System.Windows.Thickness]::new(10, 6, 10, 6)
 
     # 1. Р‘РµР№РґР¶Рё РїСЂРёРєСЂРµРїР»РµРЅРЅС‹С… С„Р°Р№Р»РѕРІ: РёРЅС‚РµСЂР°РєС‚РёРІРЅС‹Рµ РєР»РёРєР°Р±РµР»СЊРЅС‹Рµ РїР»Р°С€РєРё РґР»СЏ РёР·РѕР±СЂР°Р¶РµРЅРёР№ Рё РґРѕРєСѓРјРµРЅС‚РѕРІ
     $activeAttachments = @()
