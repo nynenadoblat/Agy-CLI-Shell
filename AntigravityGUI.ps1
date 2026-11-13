@@ -436,7 +436,7 @@ if (-not (Test-Path $defaultAgyPath)) {
                              Padding="8"
                              FontFamily="Segoe UI"
                              FontSize="13"
-                             AcceptsReturn="False"
+                             AcceptsReturn="True"
                              TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto"
                              AllowDrop="True"/>
@@ -2347,6 +2347,7 @@ function Save-LauncherConfig {
                     mode           = $t.Mode
                     effort         = $t.Effort
                     skipPerms      = [bool]$t.SkipPerms
+                    promptHistory  = if ($t.PSObject.Properties['PromptHistory']) { @($t.PromptHistory) } else { @() }
                 })
             }
             $cfg["tabs"] = @($tabsArr)
@@ -2686,10 +2687,11 @@ function Parse-InlineMarkdownRuns {
         }
         elseif ($m.Groups["bold"].Success) {
             $content = $val.Substring(2, $val.Length - 4)
-            $run = [System.Windows.Documents.Run]::new($content)
-            $run.FontWeight = [System.Windows.FontWeights]::Bold
-            $run.Foreground = $boldBrush
-            $runs.Add($run)
+            # Внутри жирного может быть ссылка или код: разбираем содержимое ещё раз
+            foreach ($inner in (Parse-InlineMarkdownRuns -LineText $content -BaseColor "#FFFFFF" -FontSize $FontSize)) {
+                $inner.FontWeight = [System.Windows.FontWeights]::Bold
+                $runs.Add($inner)
+            }
         }
         elseif ($m.Groups["italic"].Success) {
             $content = $val.Substring(1, $val.Length - 2)
@@ -7884,6 +7886,39 @@ function Prev-Tab {
     }
 }
 
+# История отправленных сообщений для листания стрелками вверх/вниз в поле ввода (как в agy CLI).
+# У каждой вкладки свои поля:
+#   PromptHistory      - отправленные из этой вкладки сообщения, от старых к новым; хранится в launcher_config.json;
+#   PromptHistoryIndex - номер показанного сообщения в PromptHistory, -1 значит, что историю сейчас не листают;
+#   PromptHistoryDraft - текст, который был в поле до начала листания: стрелка вниз после последнего сообщения возвращает его.
+# Сколько последних сообщений вкладка помнит
+$global:PromptHistoryLimit = 100
+
+function Initialize-TabPromptHistory($Tab) {
+    if ($null -eq $Tab.PSObject.Properties["PromptHistory"]) {
+        $Tab | Add-Member -NotePropertyName "PromptHistory" -NotePropertyValue ([System.Collections.Generic.List[string]]::new()) -Force
+        $Tab | Add-Member -NotePropertyName "PromptHistoryIndex" -NotePropertyValue -1 -Force
+        $Tab | Add-Member -NotePropertyName "PromptHistoryDraft" -NotePropertyValue "" -Force
+    }
+}
+
+function Add-PromptHistory($Tab, [string]$Text) {
+    Initialize-TabPromptHistory $Tab
+    $Tab.PromptHistoryIndex = -1
+    $Tab.PromptHistoryDraft = ""
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+    $count = $Tab.PromptHistory.Count
+    if ($count -gt 0 -and $Tab.PromptHistory[$count - 1] -eq $Text) { return }
+    $Tab.PromptHistory.Add($Text)
+    while ($Tab.PromptHistory.Count -gt $global:PromptHistoryLimit) { $Tab.PromptHistory.RemoveAt(0) }
+}
+
+function Show-PromptHistoryItem([string]$Text) {
+    $txtPromptInput.Text = $Text
+    $txtPromptInput.CaretIndex = $Text.Length
+    $txtPromptInput.ScrollToEnd()
+}
+
 function Restore-SavedTabs {
     $cfg = Load-LauncherConfig
     # Важно: присваивание результата выражения if разворачивает массив из одного элемента в одиночный
@@ -7905,6 +7940,13 @@ function Restore-SavedTabs {
 
             # Восстанавливаем вкладку с отложенной загрузкой (Lazy), если привязан ID диалога
             [void](Add-NewTab -Title $tTitle -ConversationId $tConvId -Workspace $tWs -Model $tModel -Mode $tMode -Effort $tEffort -SkipPerms $tSkipPerms -Lazy:([bool]$tConvId) -SkipSelect -SkipSave)
+
+            # История отправленных сообщений вкладки для листания стрелками в поле ввода
+            $restoredTab = $global:TabsList[$global:TabsList.Count - 1]
+            Initialize-TabPromptHistory $restoredTab
+            if ($st.PSObject.Properties['promptHistory'] -and $st.promptHistory) {
+                foreach ($h in @($st.promptHistory)) { $restoredTab.PromptHistory.Add([string]$h) }
+            }
         }
 
         # Активируем сохранённую вкладку и автоматически подгружаем её диалог
@@ -9042,7 +9084,8 @@ function Start-AgentExecutionJob {
 
 # Основная функция отправки запроса или добавления в очередь
 function Send-AgentPrompt {
-    $prompt = $txtPromptInput.Text.Trim()
+    $userTyped = $txtPromptInput.Text.Trim()
+    $prompt = $userTyped
     $hasAttachments = ($global:AttachedImages.Count -gt 0)
     if ([string]::IsNullOrWhiteSpace($prompt) -and -not $hasAttachments) { return }
     if ([string]::IsNullOrWhiteSpace($prompt) -and $hasAttachments) {
@@ -9098,6 +9141,7 @@ function Send-AgentPrompt {
     $skipPerms = [bool]$chkSkipPerms.IsChecked
     $convId = $tab.ConversationId
     $global:LastSentPrompt = $prompt
+    Add-PromptHistory $tab $userTyped
 
     # Сохраняем в состояние вкладки
     $tab.Workspace = $workspace
@@ -9295,6 +9339,41 @@ $txtPromptInput.Add_PreviewKeyDown({
         $e.Handled = $true
         Send-AgentPrompt
         return
+    }
+
+    # Стрелка вверх на первой строке поля: показать предыдущее отправленное сообщение
+    $noModifiers = ([System.Windows.Input.Keyboard]::Modifiers -eq [System.Windows.Input.ModifierKeys]::None)
+    $histTab = $global:ActiveTab
+    if ($histTab) { Initialize-TabPromptHistory $histTab }
+    if ($e.Key -eq [System.Windows.Input.Key]::Up -and $noModifiers -and $histTab -and $histTab.PromptHistory.Count -gt 0) {
+        $lineIdx = $txtPromptInput.GetLineIndexFromCharacterIndex($txtPromptInput.CaretIndex)
+        if ($lineIdx -le 0) {
+            if ($histTab.PromptHistoryIndex -eq -1) {
+                $histTab.PromptHistoryDraft = $txtPromptInput.Text
+                $histTab.PromptHistoryIndex = $histTab.PromptHistory.Count - 1
+            } elseif ($histTab.PromptHistoryIndex -gt 0) {
+                $histTab.PromptHistoryIndex--
+            }
+            Show-PromptHistoryItem $histTab.PromptHistory[$histTab.PromptHistoryIndex]
+            $e.Handled = $true
+            return
+        }
+    }
+
+    # Стрелка вниз на последней строке поля: показать следующее сообщение, а после последнего вернуть черновик
+    if ($e.Key -eq [System.Windows.Input.Key]::Down -and $noModifiers -and $histTab -and $histTab.PromptHistoryIndex -ne -1) {
+        $lineIdx = $txtPromptInput.GetLineIndexFromCharacterIndex($txtPromptInput.CaretIndex)
+        if ($lineIdx -ge $txtPromptInput.LineCount - 1) {
+            $histTab.PromptHistoryIndex++
+            if ($histTab.PromptHistoryIndex -ge $histTab.PromptHistory.Count) {
+                $histTab.PromptHistoryIndex = -1
+                Show-PromptHistoryItem $histTab.PromptHistoryDraft
+            } else {
+                Show-PromptHistoryItem $histTab.PromptHistory[$histTab.PromptHistoryIndex]
+            }
+            $e.Handled = $true
+            return
+        }
     }
 
     # Отмена активной цитаты по клавише Escape
