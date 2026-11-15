@@ -2747,12 +2747,16 @@ function Append-MarkdownFormatted {
         $line = $lines[$i]
 
         # 1. Fenced code block: ```[lang]
-        if ($line -match '^```(.*)$') {
-            $codeLang = $matches[1].Trim()
+        # Блок внутри пункта списка идёт с отступом: этот же отступ снимаем со строк кода
+        if ($line -match '^(\s*)```(.*)$') {
+            $fenceIndent = $matches[1].Length
+            $codeLang = $matches[2].Trim()
             $codeLines = [System.Collections.Generic.List[string]]::new()
             $i++
-            while ($i -lt $len -and $lines[$i] -notmatch '^```') {
-                $codeLines.Add($lines[$i])
+            while ($i -lt $len -and $lines[$i] -notmatch '^\s*```') {
+                $codeLine = $lines[$i]
+                $lead = $codeLine.Length - $codeLine.TrimStart().Length
+                $codeLines.Add($codeLine.Substring([math]::Min($fenceIndent, $lead)))
                 $i++
             }
             if ($i -lt $len) { $i++ } # Пропуск закрывающего ```
@@ -2764,7 +2768,9 @@ function Append-MarkdownFormatted {
             $border.BorderBrush = Get-CachedBrush "#2D2D30"
             $border.BorderThickness = [System.Windows.Thickness]::new(1)
             $border.CornerRadius = (New-ThemeCorner 4)
-            $border.Margin = [System.Windows.Thickness]::new(0, 4, 0, 6)
+            # Блок внутри пункта списка сдвигаем вправо так же, как сам пункт
+            $codeLeft = if ($fenceIndent -gt 0) { 16 + ($fenceIndent * 4) } else { 0 }
+            $border.Margin = [System.Windows.Thickness]::new($codeLeft, 4, 0, 6)
 
             $dock = [System.Windows.Controls.DockPanel]::new()
 
@@ -3049,7 +3055,7 @@ function Append-MarkdownFormatted {
         while ($i -lt $len) {
             $cur = $lines[$i]
             if ([string]::IsNullOrWhiteSpace($cur) -or 
-                $cur -match '^```' -or 
+                $cur -match '^\s*```' -or 
                 $cur -match '^\|.+\|$' -or 
                 $cur -match '^(---|___|\*\*\*)\s*$' -or 
                 $cur -match '^#{1,6}\s+' -or 
