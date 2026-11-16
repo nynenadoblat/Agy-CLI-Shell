@@ -8321,6 +8321,45 @@ $uiTimer.Add_Tick({
                         }
                     }
                 }
+                "account_ineligible" {
+                    # Google не пустил аккаунт: agy просит пройти проверку в браузере по ссылке и сам ничего не делает
+                    Finalize-ActiveToolGroup -Tab $t
+                    Finalize-TabStreamingBuffer -Tab $t
+                    if ($t.SyncState.Stopwatch) { $t.SyncState.Stopwatch.Stop() }
+                    $t.SyncState.IsRunning = $false
+                    if ($t.QueuedUserMessages -and $t.QueuedUserMessages.Count -gt 0) {
+                        $qCount = $t.QueuedUserMessages.Count
+                        $t.QueuedUserMessages.Clear()
+                        Append-ChatFormatted -Text "⚠️ Очередь отложенных сообщений ($qCount) отменена: аккаунт не прошёл проверку Google.`r`n`r`n" -Color "#FFA500" -Document $t.Document
+                    }
+                    $t.StatusText = "⛔ Google не пустил аккаунт: нужна проверка"
+                    $t.StatusColor = "#F85149"
+                    if ($t.HeaderDot) { $t.HeaderDot.Fill = (Get-CachedBrush "#F85149" metal) }
+
+                    Append-ChatFormatted -Text "`r`n⛔ [АККАУНТ НЕ ПРОШЁЛ ПРОВЕРКУ GOOGLE]`r`n" -Color "#F85149" -Bold -Document $t.Document
+                    $howTo = "Google не даёт этому аккаунту работать с Antigravity, пока аккаунт не подтверждён. Модель запрос не получила.`n`n"
+                    if ($item.Url) {
+                        $howTo += "1. Откройте ссылку и пройдите проверку в браузере: [страница проверки аккаунта Google]($($item.Url))`n"
+                        $howTo += "2. После проверки отправьте сообщение ещё раз.`n`n"
+                    } else {
+                        $howTo += "agy не прислал ссылку на проверку. Запустите agy в консоли: он покажет ссылку сам.`n`n"
+                    }
+                    $howTo += "Другой путь: кнопка **🔑 Аккаунт** → «Войти в другой аккаунт» или выбор сохранённого профиля."
+                    Append-MarkdownFormatted -Text $howTo -Document $t.Document -BaseColor "#E2C08D"
+                    [void](New-SystemMessageCard -Summary "Текст agy" -Body $item.Message -StartCollapsed -Document $t.Document)
+
+                    if ($t -eq $global:ActiveTab) {
+                        $btnSend.IsEnabled = $true
+                        $btnSend.Content = "Отправить ↵"
+                        $btnSend.Background = (Get-CachedBrush "#0E639C" metal)
+                        $btnSend.ToolTip = "Отправить сообщение агенту (Enter)"
+                        $btnStop.IsEnabled = $false
+                        $txtPromptInput.IsEnabled = $true
+                        $statusDot.Fill = (Get-CachedBrush "#F85149" metal)
+                        $txtStatus.Text = $t.StatusText
+                        Scroll-ChatLogToEnd
+                    }
+                }
                 "error" {
                     # Игнорируем запоздалую ошибку убитого процесса, если ход уже закрыл Watchdog.
                     # IsRunning здесь не проверяем: задача сбрасывает его в finally раньше, чем таймер заберёт ошибку из очереди.
@@ -8981,6 +9020,9 @@ function Start-AgentExecutionJob {
             }
 
             $turnFinished = $false
+            # ineligibleLines: строки отказа Google по проверке аккаунта (Eligibility check), если agy напечатал его в stdout.
+            # Такие строки не идут в чат как ответ модели: их разбирает событие account_ineligible после выхода agy.
+            $ineligibleLines = $null
             $reader = $proc.StandardOutput
 
             while (-not $proc.HasExited -or -not $reader.EndOfStream) {
@@ -9030,7 +9072,14 @@ function Start-AgentExecutionJob {
                             }
                         }
                     } catch {
-                        $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "token"; Text = $line })
+                        if ($null -eq $ineligibleLines -and $line -match '(?i)eligibility check failed|not eligible for Antigravity') {
+                            $ineligibleLines = [System.Collections.Generic.List[string]]::new()
+                        }
+                        if ($null -ne $ineligibleLines) {
+                            $ineligibleLines.Add($line)
+                        } else {
+                            $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "token"; Text = $line })
+                        }
                     }
                 }
             }
@@ -9054,8 +9103,17 @@ function Start-AgentExecutionJob {
                 }
             } catch {}
 
+            # Google не пустил аккаунт (Eligibility check): agy печатает причину и ссылку на проверку и сразу выходит.
+            # Текст ищем и в stderr, и в stdout: в каком из них он приходит, проверить не удалось.
+            $ineligibleText = $null
+            if ($null -ne $ineligibleLines) { $ineligibleText = ($ineligibleLines -join "`n").Trim() }
+            elseif ($errOutput -match '(?i)eligibility check failed|not eligible for Antigravity') { $ineligibleText = $errOutput }
+
             if ($st.StopRequested -or $st.TurnResolvedByWatchdog) {
                 # Остановлено пользователем или завершено Watchdog'ом — не генерируем ложных ошибок
+            } elseif ($ineligibleText) {
+                $verifyUrl = if ($ineligibleText -match 'https://accounts\.google\.com/\S+') { $Matches[0] } else { $null }
+                $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "account_ineligible"; Message = $ineligibleText; Url = $verifyUrl })
             } elseif ($turnFinished) {
                 $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "done" })
             } else {
