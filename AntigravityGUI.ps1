@@ -5252,6 +5252,31 @@ function Request-ManualQuotaRefresh {
     })
 }
 
+function Append-ResponseTime($Seconds, $Document) {
+    # Строка «Время ответа» в чате: и после обычного конца хода, и после ошибки
+    if ($null -eq $Seconds) {
+        Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $Document
+        return
+    }
+    $realTimeStr = if ($Seconds -ge 60) {
+        $m = [int][math]::Floor($Seconds / 60)
+        $s = [math]::Round($Seconds % 60, 1)
+        "${m} мин ${s} сек"
+    } else {
+        "${Seconds} сек"
+    }
+    Append-ChatFormatted -Text "`r`n⏱️ Время ответа: $realTimeStr`r`n`r`n" -Color "#888888" -Document $Document
+}
+
+function Format-Claude5hText($cld) {
+    # Текст строки 5-часового лимита Claude/GPT из ответа agy usage
+    if (-not $cld) { return "Нет данных" }
+    if ($cld.five_hour_disabled) { return "Отключен (достигнут недельный лимит)" }
+    $t = "$([double]$cld.five_hour_percent)%"
+    if ($cld.five_hour_resets_in) { $t += " • Сброс через $($cld.five_hour_resets_in)" }
+    return $t
+}
+
 function Show-UsageLimitsDialog {
     param(
         $OwnerWindow = $null,
@@ -5275,6 +5300,9 @@ function Show-UsageLimitsDialog {
         $cldWeeklyPct = if ($cld) { [double]$cld.weekly_percent } else { 0.0 }
         $cldWeeklyResets = if ($cld -and $cld.weekly_resets_in) { $cld.weekly_resets_in } else { "3д 23ч 31м" }
         $cldBlocked = if ($cld) { [bool]$cld.is_blocked } else { $true }
+        $cld5hPct = if ($cld -and -not $cld.five_hour_disabled) { [double]$cld.five_hour_percent } else { 0.0 }
+        $cld5hText = Format-Claude5hText $cld
+        $cld5hColor = if ($cld5hPct -le 0.001) { '#F85149' } else { '#4EC9B0' }
 
         $isGeminiActive = ($stats.GroupKey -eq "gemini")
 
@@ -5405,13 +5433,13 @@ function Show-UsageLimitsDialog {
                 <!-- 5-часовой лимит Claude/GPT -->
                 <DockPanel Margin="0,0,0,4">
                     <TextBlock Text="⏱️ Five Hour Limit Remaining:" FontSize="12" Foreground="#8B949E"/>
-                    <TextBlock x:Name="TxtClaude5h" Text="$(if ($cldBlocked) { 'Отключен (достигнут недельный лимит)' } else { 'Активен' })"
-                               FontSize="12" FontWeight="Bold" Foreground="$(if ($cldBlocked) { '#888888' } else { '#4EC9B0' })" HorizontalAlignment="Right"/>
+                    <TextBlock x:Name="TxtClaude5h" Text="$cld5hText"
+                               FontSize="12" FontWeight="Bold" Foreground="$cld5hColor" HorizontalAlignment="Right"/>
                 </DockPanel>
                 <ProgressBar x:Name="PrgClaude5h" Template="{StaticResource DlgLimitsProgressBarTemplate}"
-                             Height="10" Minimum="0" Maximum="100" Value="$(if ($cldBlocked) { 0 } else { 88 })"
+                             Height="10" Minimum="0" Maximum="100" Value="$cld5hPct"
                              Background="#101216" BorderBrush="#262A34" BorderThickness="1"
-                             Foreground="$(if ($cldBlocked) { '#555555' } else { '#4EC9B0' })"/>
+                             Foreground="$cld5hColor"/>
             </StackPanel>
         </Border>
 
@@ -5553,6 +5581,15 @@ function Show-UsageLimitsDialog {
                 }
                 $pCldW = $diag.FindName("PrgClaudeWeekly")
                 if ($pCldW) { $pCldW.Value = $updated.LiveClaudeGpt.weekly_percent }
+
+                $u5Pct = if ($updated.LiveClaudeGpt.five_hour_disabled) { 0.0 } else { [double]$updated.LiveClaudeGpt.five_hour_percent }
+                $u5Brush = Get-CachedBrush $(if ($u5Pct -le 0.001) { '#F85149' } else { '#4EC9B0' })
+                $tCld5 = $diag.FindName("TxtClaude5h")
+                $tCld5.Text = Format-Claude5hText $updated.LiveClaudeGpt
+                $tCld5.Foreground = $u5Brush
+                $pCld5 = $diag.FindName("PrgClaude5h")
+                $pCld5.Value = $u5Pct
+                $pCld5.Foreground = $u5Brush
             }
 
             $tCountdown = $diag.FindName("TxtResetCountdown")
@@ -5600,7 +5637,7 @@ function Show-UsageLimitsDialog {
 
 [CLAUDE AND GPT MODELS]
 • Weekly Limit: $(if ($cur.LiveClaudeGpt -and $cur.LiveClaudeGpt.is_blocked) { "0.00% (⛔ Исчерпан, сброс через $($cur.LiveClaudeGpt.weekly_resets_in))" } else { "В норме" })
-• 5-Hour Limit: $(if ($cur.LiveClaudeGpt -and $cur.LiveClaudeGpt.five_hour_disabled) { "Отключен" } else { "Активен" })
+• 5-Hour Limit: $(Format-Claude5hText $cur.LiveClaudeGpt)
 "@
                 try {
                     [System.Windows.Clipboard]::SetText($report)
@@ -8263,18 +8300,7 @@ $uiTimer.Add_Tick({
                         Append-ChatFormatted -Text "`r`n⚠️ agy закрыл ход без текста ответа: модель ничего не написала после последнего шага. Напишите «продолжай», и модель ответит.`r`n" -Color "#E2C08D" -Document $t.Document
                     }
 
-                    if ($null -ne $doneSec) {
-                        $realTimeStr = if ($doneSec -ge 60) {
-                            $m = [int]($doneSec / 60)
-                            $s = [math]::Round($doneSec % 60, 1)
-                            "${m} мин ${s} сек"
-                        } else {
-                            "${doneSec} сек"
-                        }
-                        Append-ChatFormatted -Text "`r`n⏱️ Время ответа: $realTimeStr`r`n`r`n" -Color "#888888" -Document $t.Document
-                    } else {
-                        Append-ChatFormatted -Text "`r`n" -Color "#D4D4D4" -Document $t.Document
-                    }
+                    Append-ResponseTime -Seconds $doneSec -Document $t.Document
                     if ($t.ConversationId) {
                         Update-ContextDisplay -conversationId $t.ConversationId -modelName $t.Model
                         Update-LimitsDisplay -modelName $t.Model
@@ -8478,6 +8504,10 @@ $uiTimer.Add_Tick({
                             }
                         }
                     }
+
+                    $errSec = if ($t.SyncState.Stopwatch) { [math]::Round($t.SyncState.Stopwatch.Elapsed.TotalSeconds, 1) } else { $null }
+                    Append-ResponseTime -Seconds $errSec -Document $t.Document
+                    if ($t -eq $global:ActiveTab) { Scroll-ChatLogToEnd }
                 }
             }
         }
@@ -8493,6 +8523,10 @@ $uiTimer.Start()
 $limitsAutoRefreshTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $limitsAutoRefreshTimer.Interval = [TimeSpan]::FromMinutes(5)
 $limitsAutoRefreshTimer.Add_Tick({
+    # Индикатор контекста иначе обновляется только по окончании ответа агента
+    if ($global:ActiveTab) {
+        Update-ContextDisplay -conversationId $global:ActiveTab.ConversationId -modelName $global:ActiveTab.Model
+    }
     if ($global:ActiveQuotaSyncJob) { return }
     [void](Start-AsyncQuotaSync -OnCompleted {
         Update-LimitsDisplay
@@ -9020,6 +9054,11 @@ function Start-AgentExecutionJob {
             }
 
             $turnFinished = $false
+            # resultError: текст ошибки из события result, если agy закрыл ход со status ERROR
+            $resultError = $null
+            # runGotText: модель в этом ходе прислала текст ответа. agy ставит в result status ERROR
+            # и текст последней ошибки разговора, даже старой, хотя ход прошёл. Такой ход - не ошибка.
+            $runGotText = $false
             # ineligibleLines: строки отказа Google по проверке аккаунта (Eligibility check), если agy напечатал его в stdout.
             # Такие строки не идут в чат как ответ модели: их разбирает событие account_ineligible после выхода agy.
             $ineligibleLines = $null
@@ -9053,6 +9092,7 @@ function Start-AgentExecutionJob {
                             "step_update" {
                                 $su = $evt.step_update
                                 if ($su.step_type -eq "agent_response" -and $su.text_delta) {
+                                    $runGotText = $true
                                     $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "token"; Text = $su.text_delta })
                                 }
                                 elseif ($su.step_type -eq "tool") {
@@ -9066,6 +9106,10 @@ function Start-AgentExecutionJob {
                             }
                             "result" {
                                 $turnFinished = $true
+                                # При отказе API (например, лимит исчерпан) agy присылает result со status ERROR и текстом в error
+                                if ($evt.result.status -eq "ERROR") {
+                                    $resultError = [string]$evt.result.error
+                                }
                                 if ($evt.result -and $evt.result.conversation_id) {
                                     $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "conversation_id"; Id = $evt.result.conversation_id })
                                 }
@@ -9114,6 +9158,8 @@ function Start-AgentExecutionJob {
             } elseif ($ineligibleText) {
                 $verifyUrl = if ($ineligibleText -match 'https://accounts\.google\.com/\S+') { $Matches[0] } else { $null }
                 $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "account_ineligible"; Message = $ineligibleText; Url = $verifyUrl })
+            } elseif ($resultError -and -not $runGotText) {
+                $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "error"; Message = $resultError })
             } elseif ($turnFinished) {
                 $st.Queue.Enqueue([pscustomobject]@{ RunId = $myRun; Type = "done" })
             } else {

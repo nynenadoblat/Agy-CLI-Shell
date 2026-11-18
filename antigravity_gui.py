@@ -1605,6 +1605,12 @@ class AntigravityGUI(tk.Tk):
 
         self.var_model.trace_add("write", lambda *_: self._update_context_display())
         self._update_context_display()
+        self.after(300000, self._context_timer_tick)
+
+    def _context_timer_tick(self):
+        """Раз в 5 минут обновляет индикатор контекста, в том числе пока агент работает."""
+        self._update_context_display()
+        self.after(300000, self._context_timer_tick)
 
     def _update_context_display(self, conv_id=None, model_name=None):
         """Обновляет индикатор заполненности контекста в статус-баре."""
