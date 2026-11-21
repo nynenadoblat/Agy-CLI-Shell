@@ -7285,6 +7285,9 @@ function New-TabSession {
         LastStreamActivityUtc = [DateTime]::MinValue
         LastDiskActivityUtc   = [DateTime]::MinValue
         LastTranscriptLength  = 0L
+        # WaitingBackgroundTasks: agy написал в stderr, что модель закончила шаг и ждёт фоновые задачи или таймеры.
+        # Пока поле стоит, проверка конца хода по транскрипту процесс не убивает: agy сам разбудит модель.
+        WaitingBackgroundTasks = $false
     })
 
     $isLoaded = (-not $Lazy -or [string]::IsNullOrEmpty($ConversationId))
@@ -8118,8 +8121,13 @@ $uiTimer.Add_Tick({
                                         ([DateTime]::UtcNow - $tabItem.SyncState.LastStreamActivityUtc).TotalSeconds
                                     } else { 999 }
 
-                                    # Если на диске ход завершен, а поток CLI молчит >= 2.5 сек (зависшие дочерние дескрипторы)
-                                    if ($idleStreamSec -ge 2.5) {
+                                    # Если на диске ход завершен, а поток CLI молчит >= 2.5 сек (зависшие дочерние дескрипторы).
+                                    # Когда agy ждёт фоновые задачи или таймеры (WaitingBackgroundTasks), процесс не трогаем:
+                                    # agy сам разбудит модель, а убийство дерева процессов убило бы и саму фоновую задачу.
+                                    # Строка ожидания приходит в stderr через секунду-две после того, как ответ лёг на диск,
+                                    # поэтому ответу на диске даём 4 секунды (created_at записан с точностью до секунды).
+                                    $doneStepAgeSec = ([DateTime]::UtcNow - $stepTimeUtc).TotalSeconds
+                                    if ($idleStreamSec -ge 2.5 -and $doneStepAgeSec -ge 4 -and -not $tabItem.SyncState.WaitingBackgroundTasks) {
                                         $tabItem.SyncState.TurnResolvedByWatchdog = $true
                                         if ($tabItem.SyncState.ProcessId -gt 0) {
                                             Stop-ProcessTree -processId $tabItem.SyncState.ProcessId
@@ -8161,7 +8169,10 @@ $uiTimer.Add_Tick({
                 } else { 0 }
                 $diskActive = ($tabItem.SyncState.LastDiskActivityUtc -and $tabItem.SyncState.LastDiskActivityUtc -ne [DateTime]::MinValue -and (([DateTime]::UtcNow - $tabItem.SyncState.LastDiskActivityUtc).TotalSeconds -lt 8))
 
-                if ($idleSec -ge 60 -and -not $diskActive) {
+                if ($tabItem.SyncState.WaitingBackgroundTasks) {
+                    $tabItem.StatusText = "⏳ Агент ждёт фоновую задачу или таймер и продолжит сам [Стоп для отмены] ($timeStr)"
+                    $tabItem.StatusColor = "#4FC1FF"
+                } elseif ($idleSec -ge 60 -and -not $diskActive) {
                     $tabItem.StatusText = "⚠️ Нет активности процесса (${idleSec}с) [Стоп для отмены] ($timeStr)"
                     $tabItem.StatusColor = "#E2C08D"
                 } elseif ($idleSec -ge 20 -and -not $diskActive) {
@@ -8983,6 +8994,7 @@ function Start-AgentExecutionJob {
     $Tab.SyncState.IsRunning = $true
     $Tab.SyncState.StopRequested = $false
     $Tab.SyncState.TurnResolvedByWatchdog = $false
+    $Tab.SyncState.WaitingBackgroundTasks = $false
     # TurnGotText: пришёл ли за этот ход текст ответа модели. Без текста событие done пишет в чат предупреждение
     $Tab.SyncState.TurnGotText = $false
     $Tab.SyncState.ProcessId = 0
@@ -9045,7 +9057,20 @@ function Start-AgentExecutionJob {
             $proc.StartInfo = $psi
             $proc.Start() | Out-Null
 
-            $errTask = $proc.StandardError.ReadToEndAsync()
+            # stderr читаем по строке во время хода: строка "root agent idle; waiting for N background task(s)" значит,
+            # что модель закончила шаг, а agy ждёт фоновые задачи или таймеры и потом сам продолжит ход.
+            # $pumpStderr забирает готовые строки в $errSb. Вызывается через точку, чтобы менять переменные этой задачи.
+            $errSb = [System.Text.StringBuilder]::new()
+            $errReadTask = $proc.StandardError.ReadLineAsync()
+            $pumpStderr = {
+                while ($null -ne $errReadTask -and $errReadTask.IsCompleted) {
+                    $errLine = $errReadTask.Result
+                    if ($null -eq $errLine) { $errReadTask = $null; break }
+                    [void]$errSb.AppendLine($errLine)
+                    if ($errLine -match '(?i)waiting for \d+ background task') { $st.WaitingBackgroundTasks = $true }
+                    $errReadTask = $proc.StandardError.ReadLineAsync()
+                }
+            }
             $st.ProcessId = $proc.Id
 
             if ($st.StopRequested) {
@@ -9068,6 +9093,7 @@ function Start-AgentExecutionJob {
                 if ($st.StopRequested -or $st.RunId -ne $myRun) { break }
                 $readTask = $reader.ReadLineAsync()
                 while (-not $readTask.Wait(400)) {
+                    . $pumpStderr
                     if ($st.StopRequested) { break }
                     if ($proc.HasExited) {
                         # Если процесс agy.exe завершился, даем короткий таймаут на считывание остатков буфера
@@ -9080,9 +9106,12 @@ function Start-AgentExecutionJob {
                 $line = $readTask.Result
                 if ($null -eq $line) { break }
                 $st.LastStreamActivityUtc = [DateTime]::UtcNow
+                . $pumpStderr
                 if ($line) {
                     try {
                         $evt = $line | ConvertFrom-Json
+                        # Модель снова работает (таймер или фоновая задача её разбудили): ожидание кончилось
+                        if ($evt.event -eq "step_update" -and $evt.step_update.state -eq "ACTIVE") { $st.WaitingBackgroundTasks = $false }
                         switch ($evt.event) {
                             "init" {
                                 if ($evt.conversation_id) {
@@ -9140,12 +9169,13 @@ function Start-AgentExecutionJob {
                 } catch {}
             }
 
-            $errOutput = ""
-            try {
-                if ($errTask) {
-                    $errOutput = $errTask.GetAwaiter().GetResult().Trim()
-                }
-            } catch {}
+            # Добираем хвост stderr: после выхода agy чтение доходит до конца потока и отдаёт null
+            $errDrainUntil = [DateTime]::UtcNow.AddSeconds(2)
+            while ($null -ne $errReadTask -and [DateTime]::UtcNow -lt $errDrainUntil) {
+                [void]$errReadTask.Wait(200)
+                . $pumpStderr
+            }
+            $errOutput = $errSb.ToString().Trim()
 
             # Google не пустил аккаунт (Eligibility check): agy печатает причину и ссылку на проверку и сразу выходит.
             # Текст ищем и в stderr, и в stdout: в каком из них он приходит, проверить не удалось.
@@ -9171,6 +9201,7 @@ function Start-AgentExecutionJob {
                         $trimmed = $el.Trim()
                         if ($trimmed -match '(?i)warning:\s*--mode.*sandbox is not available|continuing in the default mode') { continue }
                         if ($trimmed -match '(?i)^warning:') { continue }
+                        if ($trimmed -match '(?i)waiting for \d+ background task') { continue }
                         $realErrors += $trimmed
                     }
                 }
