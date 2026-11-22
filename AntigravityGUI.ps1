@@ -2744,8 +2744,10 @@ function Parse-InlineMarkdownRuns {
             $runs.Add($run)
         }
         elseif ($m.Groups["math"].Success) {
+            # Формулу выделяем курсивом и цветом чисел, чтобы она не сливалась с текстом
             $run = [System.Windows.Documents.Run]::new((Convert-LatexInline $m.Groups["tex"].Value))
-            $run.Foreground = $baseBrush
+            $run.Foreground = Get-CachedBrush "#B5CEA8"
+            $run.FontStyle = [System.Windows.FontStyles]::Italic
             $runs.Add($run)
         }
 
