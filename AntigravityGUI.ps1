@@ -2605,6 +2605,42 @@ function Append-ChatFormatted {
     }
 }
 
+# Модели пишут числа и знаки формулами LaTeX: $112 \times 48$, $\pm 16$.
+# Convert-LatexInline превращает текст формулы без знаков $ в обычный текст со знаками ×, ± и подобными.
+$global:LatexSymbolMap = @(
+    @('times', '×'), @('pm', '±'), @('mp', '∓'), @('cdot', '·'), @('div', '÷'),
+    @('approx', '≈'), @('sim', '~'), @('neq', '≠'), @('ne', '≠'), @('equiv', '≡'),
+    @('leq', '≤'), @('le', '≤'), @('geq', '≥'), @('ge', '≥'), @('ll', '≪'), @('gg', '≫'),
+    @('rightarrow', '→'), @('to', '→'), @('leftarrow', '←'), @('Rightarrow', '⇒'), @('leftrightarrow', '↔'),
+    @('infty', '∞'), @('circ', '°'), @('degree', '°'), @('deg', '°'), @('sum', '∑'), @('prod', '∏'),
+    @('sqrt', '√'), @('partial', '∂'), @('nabla', '∇'), @('in', '∈'), @('cdots', '…'), @('ldots', '…'), @('dots', '…'),
+    @('alpha', 'α'), @('beta', 'β'), @('gamma', 'γ'), @('delta', 'δ'), @('epsilon', 'ε'), @('theta', 'θ'),
+    @('lambda', 'λ'), @('mu', 'μ'), @('pi', 'π'), @('rho', 'ρ'), @('sigma', 'σ'), @('tau', 'τ'), @('phi', 'φ'), @('omega', 'ω'),
+    @('Delta', 'Δ'), @('Sigma', 'Σ'), @('Omega', 'Ω'), @('Pi', 'Π'), @('Phi', 'Φ')
+)
+
+function Convert-LatexInline {
+    param([string]$Tex)
+    $s = $Tex
+    # \frac{a}{b} даёт a/b, \text{м} и подобные обёртки дают своё содержимое
+    $s = [regex]::Replace($s, '\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}', '$1/$2')
+    $s = [regex]::Replace($s, '\\(?:text|mathrm|mathbf|mathit|operatorname|textbf)\s*\{([^{}]*)\}', '$1')
+    $s = [regex]::Replace($s, '\\(?:left|right)(?![a-zA-Z])', '')
+    foreach ($pair in $global:LatexSymbolMap) {
+        $s = [regex]::Replace($s, '\\' + $pair[0] + '(?![a-zA-Z])', $pair[1])
+    }
+    # «\pm 16» даёт «±16», а не «± 16»
+    $s = $s -replace '(^|[\s(])([±∓√]) (?=\d)', '$1$2'
+    # Степени и индексы: ^2 даёт ², ^{\circ} уже стал ^{°}
+    $s = $s -replace '\^\{?°\}?', '°'
+    $s = $s -replace '\^\{?2\}?', '²' -replace '\^\{?3\}?', '³'
+    # \, \; \! и \  означают пробелы разной ширины; \% \$ \_ означают сами знаки
+    $s = $s -replace '\\[,;:! ]', ' '
+    $s = $s -replace '\\([%$_&#{}])', '$1'
+    $s = $s -replace '[{}]', ''
+    return $s
+}
+
 function Parse-InlineMarkdownRuns {
     param(
         [string]$LineText,
@@ -2620,7 +2656,7 @@ function Parse-InlineMarkdownRuns {
     $codeBg = Get-CachedBrush "#28282B"
     $codeFont = [System.Windows.Media.FontFamily]::new("Consolas, Cascadia Code, Courier New")
 
-    $pattern = '(?<link>\[(?<linktext>[^\]\r\n]+)\]\((?<linkurl>[^\)\s\r\n]+)\))|(?<codeblock>`[^`\r\n]+`)|(?<bolditalic>\*\*\*[^*]+?\*\*\*|___[^_]+?___)|(?<bold>\*\*[^*]+?\*\*|__[^_]+?__)|(?<italic>\*[^*]+?\*|(?<=\s|^)_[^_]+?_(?=\s|$|[.,!?:;]))|(?<strike>~~[^~]+?~~)'
+    $pattern = '(?<link>\[(?<linktext>[^\]\r\n]+)\]\((?<linkurl>[^\)\s\r\n]+)\))|(?<codeblock>`[^`\r\n]+`)|(?<bolditalic>\*\*\*[^*]+?\*\*\*|___[^_]+?___)|(?<bold>\*\*[^*]+?\*\*|__[^_]+?__)|(?<italic>\*[^*]+?\*|(?<=\s|^)_[^_]+?_(?=\s|$|[.,!?:;]))|(?<strike>~~[^~]+?~~)|(?<math>(?<![\w$\\])\$(?=[^\s$])(?<tex>[^$\r\n]+?)(?<=[^\s$\\])\$(?![\w$]))'
 
     $lastIndex = 0
     $matches = [regex]::Matches($LineText, $pattern)
@@ -2705,6 +2741,11 @@ function Parse-InlineMarkdownRuns {
             $run = [System.Windows.Documents.Run]::new($content)
             $run.TextDecorations = [System.Windows.TextDecorations]::Strikethrough
             $run.Foreground = Get-CachedBrush "#888888"
+            $runs.Add($run)
+        }
+        elseif ($m.Groups["math"].Success) {
+            $run = [System.Windows.Documents.Run]::new((Convert-LatexInline $m.Groups["tex"].Value))
+            $run.Foreground = $baseBrush
             $runs.Add($run)
         }
 
