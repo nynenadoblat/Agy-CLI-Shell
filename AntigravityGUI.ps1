@@ -4453,6 +4453,80 @@ function global:Get-TranscriptPath([string]$conversationId, [switch]$PreferFull 
     return $compactPath
 }
 
+function Read-TranscriptTailInfo {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [int]$InitialBytes = 65536,
+        [int]$MaxBytes = 1048576
+    )
+    $fs = [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $totalLen = $fs.Length
+        if ($totalLen -le 0) {
+            return [pscustomobject]@{ Text = ""; TruncatedStart = $false }
+        }
+        $bytesToRead = [Math]::Min([long]$InitialBytes, $totalLen)
+        $truncated = ($bytesToRead -lt $totalLen)
+        $fs.Seek(-$bytesToRead, [System.IO.SeekOrigin]::End) | Out-Null
+        $buf = New-Object byte[] $bytesToRead
+        $readCount = $fs.Read($buf, 0, [int]$bytesToRead)
+        $text = [System.Text.Encoding]::UTF8.GetString($buf, 0, $readCount)
+
+        # Если последняя строка крупнее InitialBytes (напр. большой SYSTEM_MESSAGE), расширяем окно чтения до MaxBytes
+        if ($truncated -and $text.IndexOf("`n") -lt 0 -and $MaxBytes -gt $InitialBytes) {
+            $bytesToRead = [Math]::Min([long]$MaxBytes, $totalLen)
+            $truncated = ($bytesToRead -lt $totalLen)
+            $fs.Seek(-$bytesToRead, [System.IO.SeekOrigin]::End) | Out-Null
+            $buf = New-Object byte[] $bytesToRead
+            $readCount = $fs.Read($buf, 0, [int]$bytesToRead)
+            $text = [System.Text.Encoding]::UTF8.GetString($buf, 0, $readCount)
+        }
+
+        return [pscustomobject]@{
+            Text           = $text
+            TruncatedStart = $truncated
+        }
+    } finally {
+        $fs.Dispose()
+    }
+}
+
+function Get-TranscriptWatchdogDoneStep {
+    param(
+        [string]$TailText,
+        [bool]$TruncatedStart = $false
+    )
+    if ([string]::IsNullOrWhiteSpace($TailText)) { return $null }
+
+    $textToScan = $TailText
+    if ($TruncatedStart) {
+        $nlIdx = $textToScan.IndexOf("`n")
+        if ($nlIdx -lt 0) {
+            return $null
+        }
+        $textToScan = $textToScan.Substring($nlIdx + 1)
+    }
+
+    $lines = @($textToScan -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($lines.Count -eq 0) { return $null }
+
+    # Проверяем строго последний шаг транскрипта: если после PLANNER_RESPONSE уже записан
+    # SYSTEM_MESSAGE, USER_INPUT, GENERIC или другой шаг — ход продолжается, а не завершён.
+    $lastLine = $lines[$lines.Count - 1]
+    $parsed = $null
+    try {
+        $parsed = ConvertFrom-Json -InputObject $lastLine
+    } catch {
+        return $null
+    }
+    if ($null -eq $parsed) { return $null }
+    if ($parsed.type -ne "PLANNER_RESPONSE") { return $null }
+    if ($parsed.status -ne "DONE" -or [string]::IsNullOrWhiteSpace($parsed.content)) { return $null }
+    if ($parsed.tool_calls -and @($parsed.tool_calls).Count -gt 0) { return $null }
+
+    return $parsed
+}
+
 function Get-ConversationContextStats {
     param(
         [string]$conversationId,
@@ -7678,6 +7752,7 @@ function New-TabSession {
         # WaitingBackgroundTasks: agy написал в stderr, что модель закончила шаг и ждёт фоновые задачи или таймеры.
         # Пока поле стоит, проверка конца хода по транскрипту процесс не убивает: agy сам разбудит модель.
         WaitingBackgroundTasks = $false
+        MinDoneStepTimeUtc     = [DateTime]::MinValue
     })
 
     $isLoaded = (-not $Lazy -or [string]::IsNullOrEmpty($ConversationId))
@@ -8456,25 +8531,21 @@ $uiTimer.Add_Tick({
                                 $tabItem.SyncState.LastDiskActivityUtc = [DateTime]::UtcNow
                             }
 
-                            $fs = [System.IO.FileStream]::new($tPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-                            $readLen = [Math]::Min(8192L, $fs.Length)
-                            $fs.Seek(-$readLen, [System.IO.SeekOrigin]::End) | Out-Null
-                            $buf = New-Object byte[] $readLen
-                            $fs.Read($buf, 0, [int]$readLen) | Out-Null
-                            $fs.Dispose()
-                            $tail = [System.Text.Encoding]::UTF8.GetString($buf)
+                            $tailInfo = Read-TranscriptTailInfo -Path $tPath
+                            $tail = $tailInfo.Text
+                            $apiTail = if ($tail.Length -gt 8192) { $tail.Substring($tail.Length - 8192) } else { $tail }
 
                             # 1. Мониторинг ошибок API (503 / timeout)
-                            if ($tail -match '"error":\s*"API error \(attempt (\d+)\): UNAVAILABLE \(code 503\): No capacity available') {
+                            if ($apiTail -match '"error":\s*"API error \(attempt (\d+)\): UNAVAILABLE \(code 503\): No capacity available') {
                                 $attemptNum = $Matches[1]
                                 $stopHint = if ([int]$attemptNum -ge 2) { " [Стоп для отмены]" } else { "" }
                                 $tabItem.ApiWarningText = "⚠️ Дефицит мощностей Google (503, попытка $attemptNum)$stopHint"
                                 $tabItem.ApiWarningColor = "#E2C08D"
-                            } elseif ($tail -match '"error":\s*"API error \(attempt (\d+)\):.*stream idle timeout') {
+                            } elseif ($apiTail -match '"error":\s*"API error \(attempt (\d+)\):.*stream idle timeout') {
                                 $attemptNum = $Matches[1]
                                 $tabItem.ApiWarningText = "⚠️ Таймаут стрима API (попытка $attemptNum) [Стоп для отмены]"
                                 $tabItem.ApiWarningColor = "#E2C08D"
-                            } elseif ($tail -match '"error":\s*"API error \(attempt (\d+)\)') {
+                            } elseif ($apiTail -match '"error":\s*"API error \(attempt (\d+)\)') {
                                 $attemptNum = $Matches[1]
                                 $tabItem.ApiWarningText = "⚠️ Ошибка API (попытка $attemptNum)..."
                                 $tabItem.ApiWarningColor = "#E2C08D"
@@ -8484,29 +8555,19 @@ $uiTimer.Add_Tick({
                             }
 
                             # 2. Disk-Reconciliation Watchdog: детекция завершения хода на диске
-                            $tailLines = $tail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-                            $foundDoneStep = $null
-                            # Смотрим только последний PLANNER_RESPONSE: ход закончен, если в нём есть текст и нет вызовов инструментов.
-                            # Шаг с текстом и вызовом инструмента (например, "запустил тест, жду") - это середина хода.
-                            for ($li = $tailLines.Count - 1; $li -ge 0; $li--) {
-                                $curLine = $tailLines[$li]
-                                if ($curLine.Contains('"type":"PLANNER_RESPONSE"')) {
-                                    try {
-                                        $parsed = ConvertFrom-Json -InputObject $curLine
-                                        if ($parsed.status -eq "DONE" -and $parsed.content -and -not $parsed.tool_calls) {
-                                            $foundDoneStep = $parsed
-                                        }
-                                    } catch {}
-                                    break
-                                }
-                            }
+                            $foundDoneStep = Get-TranscriptWatchdogDoneStep -TailText $tail -TruncatedStart:$tailInfo.TruncatedStart
 
                             if ($foundDoneStep -and $tabItem.SyncState.TurnStartTimeUtc -and $tabItem.SyncState.TurnStartTimeUtc -ne [DateTime]::MinValue) {
                                 $stepTimeUtc = $null
                                 if ($foundDoneStep.created_at) {
                                     try { $stepTimeUtc = [DateTime]::Parse($foundDoneStep.created_at).ToUniversalTime() } catch {}
                                 }
-                                if ($stepTimeUtc -and ($stepTimeUtc -ge $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5))) {
+                                $minFloorUtc = if ($tabItem.SyncState.MinDoneStepTimeUtc -and $tabItem.SyncState.MinDoneStepTimeUtc -gt $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5)) {
+                                    $tabItem.SyncState.MinDoneStepTimeUtc
+                                } else {
+                                    $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5)
+                                }
+                                if ($stepTimeUtc -and ($stepTimeUtc -ge $minFloorUtc)) {
                                     $idleStreamSec = if ($tabItem.SyncState.LastStreamActivityUtc -and $tabItem.SyncState.LastStreamActivityUtc -ne [DateTime]::MinValue) {
                                         ([DateTime]::UtcNow - $tabItem.SyncState.LastStreamActivityUtc).TotalSeconds
                                     } else { 999 }
@@ -9392,6 +9453,7 @@ function Start-AgentExecutionJob {
     $Tab.SyncState.ProcessId = 0
     $Tab.SyncState.Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $Tab.SyncState.TurnStartTimeUtc = [DateTime]::UtcNow
+    $Tab.SyncState.MinDoneStepTimeUtc = $Tab.SyncState.TurnStartTimeUtc.AddSeconds(-5)
     $Tab.SyncState.LastStreamActivityUtc = [DateTime]::UtcNow
     $Tab.SyncState.LastDiskActivityUtc = [DateTime]::UtcNow
     $Tab.SyncState.LastTranscriptLength = 0L
@@ -9502,8 +9564,17 @@ function Start-AgentExecutionJob {
                 if ($line) {
                     try {
                         $evt = $line | ConvertFrom-Json
-                        # Модель снова работает (таймер или фоновая задача её разбудили): ожидание кончилось
-                        if ($evt.event -eq "step_update" -and $evt.step_update.state -eq "ACTIVE") { $st.WaitingBackgroundTasks = $false }
+                        # Модель снова работает (таймер или фоновая задача её разбудили): ожидание кончилось.
+                        # Поднимаем MinDoneStepTimeUtc, чтобы старый пред-фоновый PLANNER_RESPONSE никогда не сработал в Watchdog.
+                        if ($evt.event -eq "step_update" -and $evt.step_update.state -eq "ACTIVE") {
+                            if ($st.WaitingBackgroundTasks) {
+                                $wakeFloor = [DateTime]::UtcNow.AddSeconds(-2)
+                                if ($wakeFloor -gt $st.MinDoneStepTimeUtc) {
+                                    $st.MinDoneStepTimeUtc = $wakeFloor
+                                }
+                            }
+                            $st.WaitingBackgroundTasks = $false
+                        }
                         switch ($evt.event) {
                             "init" {
                                 if ($evt.conversation_id) {

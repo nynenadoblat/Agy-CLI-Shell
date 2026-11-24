@@ -1947,6 +1947,48 @@ foreach ($sym in @("parse_agy_models_output", "load_models_cache", "save_models_
 }
 Write-Host "[OK] Динамическое обновление списка моделей (agy models, кэш, Gemini 4 Hydrogen, Python-паритет) валидно." -ForegroundColor Green
 
+# 28. Регрессия Watchdog при пробуждении после фоновых задач (PLANNER_RESPONSE -> SYSTEM_MESSAGE)
+$wdResumedTail = @"
+{"step_index":225,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-24T18:39:03Z"}
+{"step_index":226,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-24T18:39:23Z","content":"Проверяю файлы Edge и Claude после перезагрузки — дождусь завершения сканирования кэша."}
+{"step_index":227,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-24T18:39:40Z","content":"Task finished."}
+"@
+if ($null -ne (Get-TranscriptWatchdogDoneStep -TailText $wdResumedTail -TruncatedStart $false)) {
+    Write-Error "Watchdog ошибочно посчитал ход завершённым, когда после PLANNER_RESPONSE уже пришёл SYSTEM_MESSAGE!"
+    exit 1
+}
+
+$wdFinishedTail = @"
+{"step_index":227,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-24T18:39:40Z","content":"Task finished."}
+{"step_index":228,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-24T18:39:52Z","content":"Всё готово."}
+"@
+$wdDoneRes = Get-TranscriptWatchdogDoneStep -TailText $wdFinishedTail -TruncatedStart $true
+if ($null -eq $wdDoneRes -or $wdDoneRes.step_index -ne 228) {
+    Write-Error "Watchdog не распознал финальный PLANNER_RESPONSE после SYSTEM_MESSAGE!"
+    exit 1
+}
+
+$wdTruncSingleLine = '{"step_index":226,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"truncated"}'
+if ($null -ne (Get-TranscriptWatchdogDoneStep -TailText $wdTruncSingleLine -TruncatedStart $true)) {
+    Write-Error "Watchdog не должен разбирать единственную обрезанную строку при TruncatedStart=true!"
+    exit 1
+}
+
+$wdTempFile = Join-Path $launcherDir "scratch\test_watchdog_tail.jsonl"
+try {
+    $bigSysMsg = ('{"step_index":227,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"' + ('x' * 70000) + '"}')
+    $fullSample = "{`"step_index`":226,`"source`":`"MODEL`",`"type`":`"PLANNER_RESPONSE`",`"status`":`"DONE`",`"content`":`"old`"}`r`n$bigSysMsg`r`n"
+    [System.IO.File]::WriteAllText($wdTempFile, $fullSample, [System.Text.Encoding]::UTF8)
+    $tailInfoRes = Read-TranscriptTailInfo -Path $wdTempFile -InitialBytes 65536 -MaxBytes 1048576
+    if ($null -ne (Get-TranscriptWatchdogDoneStep -TailText $tailInfoRes.Text -TruncatedStart:$tailInfoRes.TruncatedStart)) {
+        Write-Error "Watchdog ошибочно откатился на предыдущую строку при длинном SYSTEM_MESSAGE (>64KB)!"
+        exit 1
+    }
+} finally {
+    if (Test-Path $wdTempFile) { Remove-Item $wdTempFile -Force -ErrorAction SilentlyContinue }
+}
+Write-Host "[OK] Watchdog не убивает agy при пробуждении после фоновых задач (PLANNER_RESPONSE + SYSTEM_MESSAGE / >64KB tail)." -ForegroundColor Green
+
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0
 } finally {
