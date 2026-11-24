@@ -429,16 +429,17 @@ if ($grp.BodyBorder.Visibility -ne [System.Windows.Visibility]::Collapsed) {
     exit 1
 }
 
-# 12. Проверка настроек отправки по клавише Enter
-if ($txtPromptInput.AcceptsReturn -ne $false) {
-    Write-Error "TxtPromptInput.AcceptsReturn должен быть `$false для немедленной отправки по Enter!"
+# 12. Проверка настроек отправки по клавише Enter (перехват в PreviewKeyDown при AcceptsReturn=True для многострочного ввода)
+$guiPromptCode = Get-Content -Path $guiPs1 -Raw -Encoding utf8
+if ($txtPromptInput.AcceptsReturn -ne $true -or -not $guiPromptCode.Contains('$txtPromptInput.Add_PreviewKeyDown')) {
+    Write-Error "Отсутствует поддержка многострочного ввода (AcceptsReturn=True) или перехват Enter в PreviewKeyDown!"
     exit 1
 }
 if ($btnSend.IsDefault -ne $true) {
     Write-Error "BtnSend.IsDefault должен быть `$true!"
     exit 1
 }
-Write-Host "[OK] Настройки поля ввода и кнопки отправки по Enter валидны (AcceptsReturn = false, IsDefault = true)." -ForegroundColor Green
+Write-Host "[OK] Настройки поля ввода и кнопки отправки по Enter валидны (PreviewKeyDown + AcceptsReturn = true, IsDefault = true)." -ForegroundColor Green
 
 # Проверка создания карточки истории диалогов
 $testHistoryTools = @(
@@ -1858,6 +1859,93 @@ if (-not $guiCodeCapacity.Contains('isCapacityError') -or -not $guiCodeCapacity.
     exit 1
 }
 Write-Host "[OK] Логика реал-тайм мониторинга и обработки ошибок дефицита мощностей Google (503 No Capacity) валидна." -ForegroundColor Green
+
+# 27. Проверка динамического списка моделей (agy models, кэш, Gemini 4 Hydrogen, сохранение выбора вкладки)
+$requiredModels = @(
+    "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-xhigh",
+    "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-low",
+    "gemini-3.8-flash-high",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6-thinking",
+    "gpt-oss-120b-medium"
+)
+$comboIds = @($cmbModel.Items | ForEach-Object { [string]$_ })
+foreach ($reqM in $requiredModels) {
+    if ($comboIds -notcontains $reqM) {
+        Write-Error "В выпадающем списке моделей CmbModel отсутствует модель '$reqM'! Список: $($comboIds -join ', ')"
+        exit 1
+    }
+}
+
+$hydrogenCtxLimit = Get-ModelContextLimit -modelName "gemini-4-hydrogen-xhigh"
+if ($hydrogenCtxLimit -ne 1048576) {
+    Write-Error "Get-ModelContextLimit для gemini-4-hydrogen-xhigh вернул $hydrogenCtxLimit вместо 1048576!"
+    exit 1
+}
+$hydrogenQuota = Get-DailyUsageStats -modelName "gemini-4-hydrogen-xhigh"
+if ($hydrogenQuota.DisplayName -ne "Gemini 4 Hydrogen (XHigh)" -or $hydrogenQuota.GroupKey -ne "gemini") {
+    Write-Error "Некорректные метаданные квот для gemini-4-hydrogen-xhigh: DisplayName='$($hydrogenQuota.DisplayName)', GroupKey='$($hydrogenQuota.GroupKey)'"
+    exit 1
+}
+
+$sampleAgyOut = @"
+Fetching available models...
+gemini-4-hydrogen-xhigh	Gemini 4 Hydrogen (XHigh)
+gemini-5-nova-ultra	Gemini 5 Nova (Ultra)
+gemini-5-nova-ultra	Gemini 5 Nova (Ultra)
+claude-sonnet-4-6	Claude Sonnet 4.6 (Thinking)
+"@
+$parsedSample = @(Parse-AgyModelsOutput -RawOutput $sampleAgyOut)
+if ($parsedSample.Count -ne 3 -or $parsedSample[1].Id -ne "gemini-5-nova-ultra" -or $parsedSample[1].Name -ne "Gemini 5 Nova (Ultra)") {
+    Write-Error "Parse-AgyModelsOutput некорректно разобрал вывод agy models! Получено элементов: $($parsedSample.Count)"
+    exit 1
+}
+
+$origModelsCachePath = $script:ModelsCacheFilePath
+$origCatalogSnapshot = @($script:AvailableModelsCatalog)
+$origTabModel = $global:ActiveTab.Model
+$tempModelsCachePath = Join-Path $launcherDir "scratch\test_models_cache.json"
+try {
+    $script:ModelsCacheFilePath = $tempModelsCachePath
+    if (Test-Path $tempModelsCachePath) { Remove-Item $tempModelsCachePath -Force }
+    Save-ModelsCache -Models $parsedSample
+    $reloadedModels = @(Load-ModelsCache)
+    if ($reloadedModels.Count -ne 3 -or $reloadedModels[1].Id -ne "gemini-5-nova-ultra") {
+        Write-Error "Load-ModelsCache вернул некорректные данные после Save-ModelsCache!"
+        exit 1
+    }
+
+    # Проверка обновления списка без потери выбранной модели активной вкладки
+    Set-ComboSelectedModel -ModelId "gemini-4-hydrogen-xhigh"
+    $global:ActiveTab.Model = "gemini-4-hydrogen-xhigh"
+    Set-AvailableModels -Models $reloadedModels
+    if ([string]$cmbModel.SelectedItem -ne "gemini-4-hydrogen-xhigh" -or $global:ActiveTab.Model -ne "gemini-4-hydrogen-xhigh") {
+        Write-Error "Set-AvailableModels потерял выбранную модель активной вкладки!"
+        exit 1
+    }
+    $updatedComboIds = @($cmbModel.Items | ForEach-Object { [string]$_ })
+    if ($updatedComboIds -notcontains "gemini-5-nova-ultra") {
+        Write-Error "Новая модель из agy models (gemini-5-nova-ultra) не попала в CmbModel!"
+        exit 1
+    }
+} finally {
+    $script:ModelsCacheFilePath = $origModelsCachePath
+    Set-AvailableModels -Models $origCatalogSnapshot
+    $global:ActiveTab.Model = $origTabModel
+    Set-ComboSelectedModel -ModelId $origTabModel
+    if (Test-Path $tempModelsCachePath) { Remove-Item $tempModelsCachePath -Force -ErrorAction SilentlyContinue }
+}
+
+$pyModelsCheck = [System.IO.File]::ReadAllText((Join-Path $launcherDir "antigravity_gui.py"), [System.Text.Encoding]::UTF8)
+foreach ($sym in @("parse_agy_models_output", "load_models_cache", "save_models_cache", "_start_models_sync", "gemini-4-hydrogen-xhigh")) {
+    if (-not $pyModelsCheck.Contains($sym)) {
+        Write-Error "В antigravity_gui.py отсутствует '$sym'!"
+        exit 1
+    }
+}
+Write-Host "[OK] Динамическое обновление списка моделей (agy models, кэш, Gemini 4 Hydrogen, Python-паритет) валидно." -ForegroundColor Green
 
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0

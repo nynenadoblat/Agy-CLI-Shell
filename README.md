@@ -46,10 +46,11 @@ python antigravity_gui.py
   - Текстовое поле с возможностью ручного ввода или кнопка «Обзор...».
   - Выпадающий список с авто-обнаружением всех ваших проектов внутри корневой папки проектов (по умолчанию это папка, в которой лежит папка лаунчера; другую можно задать ключом `projectsRoot` в `launcher_config.json`), например (`Voxel Bastion Co-op 2`, `Fleas vs Robots...`, `Test Rig` и др.).
 - **Выбор модели**:
-  - `gemini-3.8-flash-high` (по умолчанию, максимальная скорость и точность);
-  - `gemini-3.8-flash-medium` / `gemini-3.8-flash-low`;
-  - `claude-sonnet-4-6` / `claude-opus-4-6-thinking`;
-  - `gpt-oss-120b-medium`.
+  - Актуальный список подтягивается динамически из `agy models` (с кэшем и встроенным фолбэком), включая:
+    - `gemini-4-hydrogen-high` / `gemini-4-hydrogen-xhigh` / `gemini-4-hydrogen-medium` / `gemini-4-hydrogen-low`;
+    - `gemini-3.8-flash-high` (по умолчанию) / `gemini-3.8-flash-medium` / `gemini-3.8-flash-low`;
+    - `claude-sonnet-4-6` / `claude-opus-4-6-thinking`;
+    - `gpt-oss-120b-medium`.
 - **Режимы работы агента (`--mode`)**:
   - `auto` — автономное принятие решений и выполнение задач;
   - `plan` — режим планирования без прямого изменения кода;
@@ -107,7 +108,7 @@ python antigravity_gui.py
   - **Псевдографическая шкала (Unicode Bar)**:
     - В окне «Все диалоги...» панель предпросмотра отображает текстово-графическую полосу вида `[██░░░░░░░░░░░░░░░░░░] 10.3% (107.9k / 1.0M)` с разбивкой на входные данные, кэш и генерацию;
   - **Автоматический учет лимитов каждой модели**:
-    - `gemini-3.8-flash-*` — лимит **1 000 000 токенов (1M)**;
+    - `gemini-4-hydrogen-*` / `gemini-3.8-flash-*` — лимит **1 000 000 токенов (1M)**;
     - `gemini-1.5-pro` / `gemini-2.0-pro` / `gemini-2.5-pro` — лимит **2 097 152 токенов (2M)**;
     - `claude-sonnet-4-6` / `claude-opus-4-6-thinking` — лимит **200 000 токенов (200k)**;
     - `gpt-oss-120b-medium` — лимит **128 000 токенов (128k)**;

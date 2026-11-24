@@ -252,16 +252,16 @@ if (-not (Test-Path $defaultAgyPath)) {
                 <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*" MinWidth="60"/>
+                        <ColumnDefinition Width="*" MinWidth="40"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="140"/>
-                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="105"/>
+                        <ColumnDefinition Width="6"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="155"/>
-                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="195"/>
+                        <ColumnDefinition Width="6"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="90"/>
-                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="78"/>
+                        <ColumnDefinition Width="6"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
@@ -2475,17 +2475,346 @@ if ($loadedCfg -and $loadedCfg.projectsRoot -and (Test-Path $loadedCfg.projectsR
 }
 $txtWorkspace.Text = $defaultWorkspace
 
-# Список доступных моделей
-$availableModels = @(
-    "gemini-3.8-flash-high",
-    "gemini-3.8-flash-medium",
-    "gemini-3.8-flash-low",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6-thinking",
-    "gpt-oss-120b-medium"
+# Динамический список доступных моделей (кэш + асинхронный опрос `agy models` + встроенный фолбэк)
+$script:ModelsCacheFilePath = Join-Path $env:USERPROFILE ".gemini\antigravity-cli\launcher_models_cache.json"
+$script:DefaultFallbackModels = @(
+    [pscustomobject]@{ Id = "gemini-4-hydrogen-high"; Name = "Gemini 4 Hydrogen (High)" },
+    [pscustomobject]@{ Id = "gemini-4-hydrogen-xhigh"; Name = "Gemini 4 Hydrogen (XHigh)" },
+    [pscustomobject]@{ Id = "gemini-4-hydrogen-medium"; Name = "Gemini 4 Hydrogen (Medium)" },
+    [pscustomobject]@{ Id = "gemini-4-hydrogen-low"; Name = "Gemini 4 Hydrogen (Low)" },
+    [pscustomobject]@{ Id = "gemini-3.8-flash-high"; Name = "Gemini 3.8 Flash (High)" },
+    [pscustomobject]@{ Id = "gemini-3.8-flash-medium"; Name = "Gemini 3.8 Flash (Medium)" },
+    [pscustomobject]@{ Id = "gemini-3.8-flash-low"; Name = "Gemini 3.8 Flash (Low)" },
+    [pscustomobject]@{ Id = "claude-sonnet-4-6"; Name = "Claude Sonnet 4.6 (Thinking)" },
+    [pscustomobject]@{ Id = "claude-opus-4-6-thinking"; Name = "Claude Opus 4.6 (Thinking)" },
+    [pscustomobject]@{ Id = "gpt-oss-120b-medium"; Name = "GPT-OSS 120B (Medium)" }
 )
-foreach ($m in $availableModels) { [void]$cmbModel.Items.Add($m) }
-$cmbModel.SelectedItem = "gemini-3.8-flash-high"
+$script:AvailableModelsCatalog = @($script:DefaultFallbackModels)
+$script:ModelDisplayNameMap = [System.Collections.Hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+$global:SuppressModelComboEvent = $false
+$global:ActiveModelsSyncJob = $null
+
+function Get-PrettyModelDisplayName {
+    param([string]$ModelId)
+    if ([string]::IsNullOrWhiteSpace($ModelId)) { return "Gemini 3.8 Flash" }
+    $m = $ModelId.ToLowerInvariant()
+    $effortLabel = ""
+    if ($m -match '(?:^|-)xhigh$') { $effortLabel = " (XHigh)" }
+    elseif ($m -match '(?:^|-)high$') { $effortLabel = " (High)" }
+    elseif ($m -match '(?:^|-)medium$') { $effortLabel = " (Medium)" }
+    elseif ($m -match '(?:^|-)low$') { $effortLabel = " (Low)" }
+
+    if ($m.Contains("hydrogen")) { return "Gemini 4 Hydrogen$effortLabel" }
+    if ($m.Contains("gemini") -and $m.Contains("3.8")) { return "Gemini 3.8 Flash$effortLabel" }
+    if ($m.Contains("opus")) {
+        if ($m -match '3[-.]5') { return "Claude 3.5 Opus" }
+        if ($m -match '4[-.]6') { return "Claude Opus 4.6 (Thinking)" }
+        return "Claude Opus"
+    }
+    if ($m.Contains("claude") -or $m.Contains("sonnet")) {
+        if ($m -match '3[-.]7') { return "Claude 3.7 Sonnet" }
+        if ($m -match '4[-.]6') { return "Claude Sonnet 4.6 (Thinking)" }
+        return "Claude Sonnet"
+    }
+    if ($m.Contains("gpt-oss") -or $m.Contains("gpt")) { return "GPT-OSS 120B$effortLabel" }
+
+    $parts = @($ModelId -split '[-_]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($parts.Count -eq 0) { return $ModelId }
+    $ti = [System.Globalization.CultureInfo]::InvariantCulture.TextInfo
+    $words = foreach ($p in $parts) {
+        if ($p -match '^\d+(?:\.\d+)*$') { $p } else { $ti.ToTitleCase($p.ToLowerInvariant()) }
+    }
+    return ($words -join ' ')
+}
+
+function Get-ModelDisplayName {
+    param([string]$ModelId)
+    if ([string]::IsNullOrWhiteSpace($ModelId)) { return "Gemini 3.8 Flash" }
+    if ($script:ModelDisplayNameMap -and $script:ModelDisplayNameMap.ContainsKey($ModelId)) {
+        return [string]$script:ModelDisplayNameMap[$ModelId]
+    }
+    return (Get-PrettyModelDisplayName -ModelId $ModelId)
+}
+
+function Parse-AgyModelsOutput {
+    param([string]$RawOutput)
+    if ([string]::IsNullOrWhiteSpace($RawOutput)) { return @() }
+    $list = [System.Collections.Generic.List[psobject]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($rawLine in ($RawOutput -split "\r?\n")) {
+        $line = $rawLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -match '^Fetching available models') { continue }
+
+        $parts = $line -split "`t", 2
+        $id = $parts[0].Trim()
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]*$') { continue }
+        if (-not $seen.Add($id)) { continue }
+
+        $disp = if ($parts.Count -gt 1 -and -not [string]::IsNullOrWhiteSpace($parts[1])) {
+            $parts[1].Trim()
+        } else {
+            Get-PrettyModelDisplayName -ModelId $id
+        }
+        $list.Add([pscustomobject]@{ Id = $id; Name = $disp })
+    }
+    return @($list)
+}
+
+function Load-ModelsCache {
+    if (-not $script:ModelsCacheFilePath -or -not (Test-Path -LiteralPath $script:ModelsCacheFilePath)) { return $null }
+    try {
+        $raw = [System.IO.File]::ReadAllText($script:ModelsCacheFilePath, [System.Text.Encoding]::UTF8)
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        $json = $raw | ConvertFrom-Json
+        if (-not $json -or -not $json.models) { return $null }
+
+        $list = [System.Collections.Generic.List[psobject]]::new()
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($item in @($json.models)) {
+            if (-not $item -or [string]::IsNullOrWhiteSpace([string]$item.id)) { continue }
+            $id = ([string]$item.id).Trim()
+            if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]*$') { continue }
+            if (-not $seen.Add($id)) { continue }
+            $name = if ($item.PSObject.Properties['name'] -and -not [string]::IsNullOrWhiteSpace([string]$item.name)) {
+                ([string]$item.name).Trim()
+            } else {
+                Get-PrettyModelDisplayName -ModelId $id
+            }
+            $list.Add([pscustomobject]@{ Id = $id; Name = $name })
+        }
+        if ($list.Count -eq 0) { return $null }
+        return @($list)
+    } catch {
+        return $null
+    }
+}
+
+function Save-ModelsCache {
+    param([object[]]$Models)
+    $items = @($Models | Where-Object { $_ -and -not [string]::IsNullOrWhiteSpace($_.Id) })
+    if ($items.Count -eq 0 -or [string]::IsNullOrWhiteSpace($script:ModelsCacheFilePath)) { return }
+    try {
+        $dir = [System.IO.Path]::GetDirectoryName($script:ModelsCacheFilePath)
+        if (-not [string]::IsNullOrEmpty($dir) -and -not [System.IO.Directory]::Exists($dir)) {
+            [System.IO.Directory]::CreateDirectory($dir) | Out-Null
+        }
+        $payload = [ordered]@{
+            updated_at = [DateTime]::Now.ToString("o")
+            models     = @($items | ForEach-Object { [ordered]@{ id = [string]$_.Id; name = [string]$_.Name } })
+        }
+        $jsonStr = $payload | ConvertTo-Json -Depth 4
+        $tmpPath = $script:ModelsCacheFilePath + ".tmp"
+        [System.IO.File]::WriteAllText($tmpPath, $jsonStr, [System.Text.UTF8Encoding]::new($false))
+        if ([System.IO.File]::Exists($script:ModelsCacheFilePath)) {
+            [System.IO.File]::Replace($tmpPath, $script:ModelsCacheFilePath, $null)
+        } else {
+            [System.IO.File]::Move($tmpPath, $script:ModelsCacheFilePath)
+        }
+    } catch {}
+}
+
+function Get-DefaultModelId {
+    $preferred = "gemini-3.8-flash-high"
+    if ($script:AvailableModelsCatalog) {
+        foreach ($m in @($script:AvailableModelsCatalog)) {
+            if ($m.Id -eq $preferred) { return $preferred }
+        }
+        $first = @($script:AvailableModelsCatalog)[0]
+        if ($first -and $first.Id) { return [string]$first.Id }
+    }
+    return $preferred
+}
+
+function Set-ComboSelectedModel {
+    param([string]$ModelId)
+    if (-not $cmbModel) { return }
+    $targetId = if ([string]::IsNullOrWhiteSpace($ModelId)) { Get-DefaultModelId } else { $ModelId.Trim() }
+    $global:SuppressModelComboEvent = $true
+    try {
+        $found = $false
+        foreach ($existing in $cmbModel.Items) {
+            if ([string]$existing -eq $targetId) { $found = $true; break }
+        }
+        if (-not $found) {
+            [void]$cmbModel.Items.Add($targetId)
+        }
+        $cmbModel.SelectedItem = $targetId
+    } finally {
+        $global:SuppressModelComboEvent = $false
+    }
+}
+
+function Set-AvailableModels {
+    param([object[]]$Models)
+    $normalized = [System.Collections.Generic.List[psobject]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($m in @($Models)) {
+        if (-not $m) { continue }
+        $id = if ($m -is [string]) { $m.Trim() } elseif ($m.PSObject.Properties['Id']) { ([string]$m.Id).Trim() } else { "" }
+        if ([string]::IsNullOrWhiteSpace($id) -or -not $seen.Add($id)) { continue }
+        $name = if ($m -isnot [string] -and $m.PSObject.Properties['Name'] -and -not [string]::IsNullOrWhiteSpace([string]$m.Name)) {
+            ([string]$m.Name).Trim()
+        } else {
+            Get-PrettyModelDisplayName -ModelId $id
+        }
+        $normalized.Add([pscustomobject]@{ Id = $id; Name = $name })
+    }
+    if ($normalized.Count -eq 0) {
+        foreach ($fb in $script:DefaultFallbackModels) { $normalized.Add($fb) }
+    }
+
+    $script:AvailableModelsCatalog = @($normalized)
+    $newMap = [System.Collections.Hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($m in $script:AvailableModelsCatalog) {
+        $newMap[$m.Id] = $m.Name
+    }
+    $script:ModelDisplayNameMap = $newMap
+
+    if ($cmbModel) {
+        $desiredModel = if ($global:ActiveTab -and -not [string]::IsNullOrWhiteSpace($global:ActiveTab.Model)) {
+            [string]$global:ActiveTab.Model
+        } elseif ($cmbModel.SelectedItem) {
+            $cmbModel.SelectedItem.ToString()
+        } else {
+            Get-DefaultModelId
+        }
+
+        $targetIds = [System.Collections.Generic.List[string]]::new()
+        foreach ($m in $script:AvailableModelsCatalog) { $targetIds.Add($m.Id) }
+        if (-not [string]::IsNullOrWhiteSpace($desiredModel) -and -not $seen.Contains($desiredModel)) {
+            $targetIds.Add($desiredModel)
+        }
+
+        $sameItems = ($cmbModel.Items.Count -eq $targetIds.Count)
+        if ($sameItems) {
+            for ($i = 0; $i -lt $targetIds.Count; $i++) {
+                if ([string]$cmbModel.Items[$i] -ne $targetIds[$i]) {
+                    $sameItems = $false
+                    break
+                }
+            }
+        }
+
+        if (-not $sameItems) {
+            $global:SuppressModelComboEvent = $true
+            try {
+                $cmbModel.Items.Clear()
+                foreach ($id in $targetIds) { [void]$cmbModel.Items.Add($id) }
+                $cmbModel.SelectedItem = $desiredModel
+            } finally {
+                $global:SuppressModelComboEvent = $false
+            }
+        } elseif ([string]$cmbModel.SelectedItem -ne $desiredModel) {
+            Set-ComboSelectedModel -ModelId $desiredModel
+        }
+    }
+
+    if ($global:ActiveTab) {
+        try {
+            Update-ContextDisplay -conversationId $global:ActiveTab.ConversationId -modelName $global:ActiveTab.Model
+            Update-LimitsDisplay -modelName $global:ActiveTab.Model
+        } catch {}
+    }
+}
+
+function Start-AsyncModelsSync {
+    param([scriptblock]$OnCompleted)
+    if ($global:ActiveModelsSyncJob -and $global:ActiveModelsSyncJob.AsyncResult -and -not $global:ActiveModelsSyncJob.AsyncResult.IsCompleted) {
+        if ($OnCompleted) {
+            [void]$global:ActiveModelsSyncJob.Callbacks.Add($OnCompleted)
+        }
+        return $global:ActiveModelsSyncJob
+    }
+
+    $agyBin = if ($defaultAgyPath -and (Test-Path $defaultAgyPath)) { $defaultAgyPath } else { "agy.exe" }
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({
+        param($binPath)
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = if ($binPath -and (Test-Path $binPath)) { $binPath } else { "agy.exe" }
+            $psi.Arguments = "models"
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+            $psi.CreateNoWindow = $true
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $outTask = $proc.StandardOutput.ReadToEndAsync()
+            $errTask = $proc.StandardError.ReadToEndAsync()
+            if (-not $proc.WaitForExit(11000)) {
+                try { $proc.Kill() } catch {}
+                return $null
+            }
+            $null = $outTask.Wait(1000)
+            $null = $errTask.Wait(1000)
+            if ($proc.ExitCode -ne 0) { return $null }
+            return $outTask.Result
+        } catch {
+            return $null
+        }
+    }).AddArgument($agyBin)
+
+    $asyncResult = $ps.BeginInvoke()
+    $callbacks = New-Object System.Collections.ArrayList
+    if ($OnCompleted) { [void]$callbacks.Add($OnCompleted) }
+
+    $startTime = [DateTime]::UtcNow
+    $timer = New-Object System.Windows.Threading.DispatcherTimer([System.Windows.Threading.DispatcherPriority]::Normal)
+    $timer.Interval = [TimeSpan]::FromMilliseconds(100)
+
+    $jobObj = [pscustomobject]@{
+        PowerShell  = $ps
+        AsyncResult = $asyncResult
+        Timer       = $timer
+        Callbacks   = $callbacks
+    }
+    $global:ActiveModelsSyncJob = $jobObj
+
+    $tickHandler = {
+        $isDone = ($asyncResult -and $asyncResult.IsCompleted)
+        $isTimeout = (([DateTime]::UtcNow - $startTime).TotalMilliseconds -gt 12000)
+
+        if ($isDone -or $isTimeout) {
+            $timer.Stop()
+            $rawOut = $null
+            if ($isDone) {
+                try { $rawOut = $ps.EndInvoke($asyncResult) } catch {}
+            } else {
+                try { $ps.Stop() } catch {}
+            }
+            try { $ps.Dispose() } catch {}
+
+            if ($rawOut) {
+                $parsedModels = @(Parse-AgyModelsOutput -RawOutput ([string]$rawOut))
+                if ($parsedModels.Count -gt 0) {
+                    Save-ModelsCache -Models $parsedModels
+                    Set-AvailableModels -Models $parsedModels
+                }
+            }
+
+            $currentCallbacks = @($jobObj.Callbacks)
+            $global:ActiveModelsSyncJob = $null
+
+            foreach ($cb in $currentCallbacks) {
+                try { & $cb } catch {}
+            }
+        }
+    }.GetNewClosure()
+    $timer.Add_Tick($tickHandler)
+    $timer.Start()
+    return $jobObj
+}
+
+$cachedModelsInit = Load-ModelsCache
+$initialModelsList = if ($cachedModelsInit -and @($cachedModelsInit).Count -gt 0) { $cachedModelsInit } else { $script:DefaultFallbackModels }
+Set-AvailableModels -Models $initialModelsList
+Set-ComboSelectedModel -ModelId (Get-DefaultModelId)
 
 # Режимы агента
 $availableModes = @("auto", "plan", "accept-edits")
@@ -4574,10 +4903,11 @@ function Show-ContextDetailsDialog {
 function Get-ModelQuotaLimits {
     param([string]$modelName = "gemini-3.8-flash-high")
     $m = if ($modelName) { $modelName.ToLowerInvariant() } else { "" }
+    $resolvedDisplay = Get-ModelDisplayName -ModelId $modelName
     if ($m.Contains("gemini")) {
         return [pscustomobject]@{
             ModelName    = $modelName
-            DisplayName  = "Gemini 3.8 Flash"
+            DisplayName  = $resolvedDisplay
             MaxRpd       = 1500
             MaxRpm       = 60
             MaxTpm       = 4000000
@@ -4587,7 +4917,7 @@ function Get-ModelQuotaLimits {
     if ($m.Contains("opus")) {
         return [pscustomobject]@{
             ModelName    = $modelName
-            DisplayName  = "Claude 3.5 Opus"
+            DisplayName  = $resolvedDisplay
             MaxRpd       = 500
             MaxRpm       = 20
             MaxTpm       = 500000
@@ -4597,7 +4927,7 @@ function Get-ModelQuotaLimits {
     if ($m.Contains("claude") -or $m.Contains("sonnet")) {
         return [pscustomobject]@{
             ModelName    = $modelName
-            DisplayName  = "Claude 3.7 Sonnet"
+            DisplayName  = $resolvedDisplay
             MaxRpd       = 1000
             MaxRpm       = 50
             MaxTpm       = 1000000
@@ -4607,7 +4937,7 @@ function Get-ModelQuotaLimits {
     if ($m.Contains("gpt-oss") -or $m.Contains("gpt")) {
         return [pscustomobject]@{
             ModelName    = $modelName
-            DisplayName  = "GPT-OSS 120B"
+            DisplayName  = $resolvedDisplay
             MaxRpd       = 800
             MaxRpm       = 30
             MaxTpm       = 800000
@@ -4616,7 +4946,7 @@ function Get-ModelQuotaLimits {
     }
     return [pscustomobject]@{
         ModelName    = $modelName
-        DisplayName  = "Gemini 3.8 Flash"
+        DisplayName  = $resolvedDisplay
         MaxRpd       = 1500
         MaxRpm       = 60
         MaxTpm       = 4000000
@@ -5279,7 +5609,8 @@ function Request-ManualQuotaRefresh {
         $txtStatus.Text = "🔄 Принудительное обновление лимитов (F5)..."
     }
 
-    # Запуск асинхронного неблокирующего опроса agy.exe -p /usage
+    # Запуск асинхронного неблокирующего опроса agy.exe -p /usage и списка моделей
+    [void](Start-AsyncModelsSync)
     [void](Start-AsyncQuotaSync -OnCompleted {
         Update-LimitsDisplay -ForceRefresh
         $curTab = if ($null -ne $global:ActiveTab) { $global:ActiveTab } else { $null }
@@ -5320,6 +5651,16 @@ function Format-Claude5hText($cld) {
     return $t
 }
 
+function Format-PoolModelsSubtitle {
+    param($PoolData, [string]$FallbackText)
+    $raw = if ($PoolData -and $PoolData.PSObject.Properties['description']) { [string]$PoolData.description } else { "" }
+    if ($raw -match 'Models within this group:\s*(.+)$') {
+        $items = $Matches[1].Trim()
+        if ($items) { return " ($items)" }
+    }
+    return " ($FallbackText)"
+}
+
 function Show-UsageLimitsDialog {
     param(
         $OwnerWindow = $null,
@@ -5348,6 +5689,8 @@ function Show-UsageLimitsDialog {
         $cld5hColor = if ($cld5hPct -le 0.001) { '#F85149' } else { '#4EC9B0' }
 
         $isGeminiActive = ($stats.GroupKey -eq "gemini")
+        $gemPoolModelsText = [System.Security.SecurityElement]::Escape((Format-PoolModelsSubtitle $gem "Gemini 4 Hydrogen, Gemini 3.8 Flash"))
+        $cldPoolModelsText = [System.Security.SecurityElement]::Escape((Format-PoolModelsSubtitle $cld "Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B"))
 
         $dialogXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -5417,7 +5760,7 @@ function Show-UsageLimitsDialog {
                 <DockPanel Margin="0,0,0,8">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🤖 GEMINI MODELS" FontSize="13" FontWeight="Bold" Foreground="#4EC9B0"/>
-                        <TextBlock Text=" (Gemini Flash, Gemini Pro)" FontSize="11" Foreground="#8B949E" Margin="6,2,0,0"/>
+                        <TextBlock x:Name="TxtGeminiPoolModels" Text="$gemPoolModelsText" FontSize="11" Foreground="#8B949E" Margin="6,2,0,0"/>
                     </StackPanel>
                     <Border Visibility="$(if ($isGeminiActive) { 'Visible' } else { 'Collapsed' })"
                             Background="#1B382F" BorderBrush="#2E6B58" BorderThickness="1" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right">
@@ -5454,7 +5797,7 @@ function Show-UsageLimitsDialog {
                 <DockPanel Margin="0,0,0,8">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🧠 CLAUDE AND GPT MODELS" FontSize="13" FontWeight="Bold" Foreground="#E2C08D"/>
-                        <TextBlock Text=" (Claude Opus, Claude Sonnet, GPT-OSS)" FontSize="11" Foreground="#8B949E" Margin="6,2,0,0"/>
+                        <TextBlock x:Name="TxtClaudePoolModels" Text="$cldPoolModelsText" FontSize="11" Foreground="#8B949E" Margin="6,2,0,0"/>
                     </StackPanel>
                     <Border Visibility="$(if (-not $isGeminiActive) { 'Visible' } else { 'Collapsed' })"
                             Background="#3E1E22" BorderBrush="#7A2830" BorderThickness="1" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right">
@@ -5601,6 +5944,8 @@ function Show-UsageLimitsDialog {
 
             # Обновление пула Gemini
             if ($updated.LiveGemini) {
+                $tGemPool = $diag.FindName("TxtGeminiPoolModels")
+                if ($tGemPool) { $tGemPool.Text = Format-PoolModelsSubtitle $updated.LiveGemini "Gemini 4 Hydrogen, Gemini 3.8 Flash" }
                 $tGemW = $diag.FindName("TxtGeminiWeekly")
                 if ($tGemW) { $tGemW.Text = "$($updated.LiveGemini.weekly_percent)% • Сброс через $($updated.LiveGemini.weekly_resets_in)" }
                 $pGemW = $diag.FindName("PrgGeminiWeekly")
@@ -5614,6 +5959,8 @@ function Show-UsageLimitsDialog {
 
             # Обновление пула Claude/GPT
             if ($updated.LiveClaudeGpt) {
+                $tCldPool = $diag.FindName("TxtClaudePoolModels")
+                if ($tCldPool) { $tCldPool.Text = Format-PoolModelsSubtitle $updated.LiveClaudeGpt "Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B" }
                 $tCldW = $diag.FindName("TxtClaudeWeekly")
                 if ($tCldW) {
                     $tCldW.Text = if ($updated.LiveClaudeGpt.is_blocked) {
@@ -7311,7 +7658,7 @@ function New-TabSession {
     $doc.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
     
     $tabWs = if ($Workspace) { $Workspace } elseif ($txtWorkspace) { $txtWorkspace.Text } else { $defaultWorkspace }
-    $tabModel = if ($Model) { $Model } elseif ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { "gemini-2.5-pro" }
+    $tabModel = if ($Model) { $Model } elseif ($cmbModel -and $cmbModel.SelectedItem) { $cmbModel.SelectedItem.ToString() } else { Get-DefaultModelId }
     $tabMode = if ($Mode) { $Mode } elseif ($cmbMode -and $cmbMode.SelectedItem) { $cmbMode.SelectedItem.ToString() } else { "code" }
     $tabEffort = if ($Effort) { $Effort } else { "auto" }
     $tabSkipPerms = if ($null -ne $SkipPerms) { $SkipPerms } elseif ($chkSkipPerms) { [bool]$chkSkipPerms.IsChecked } else { $true }
@@ -7745,7 +8092,7 @@ function Switch-ToTab {
 
     # Восстанавливаем состояние полей ввода
     $txtWorkspace.Text = $Tab.Workspace
-    if ($cmbModel -and $Tab.Model) { $cmbModel.SelectedItem = $Tab.Model }
+    if ($cmbModel -and $Tab.Model) { Set-ComboSelectedModel -ModelId $Tab.Model }
     if ($cmbMode -and $Tab.Mode) { $cmbMode.SelectedItem = $Tab.Mode }
     if ($chkSkipPerms) { $chkSkipPerms.IsChecked = $Tab.SkipPerms }
     $txtPromptInput.Text = $Tab.PromptText
@@ -8521,7 +8868,7 @@ $uiTimer.Add_Tick({
                             if ($t.HeaderDot) {
                                 $t.HeaderDot.Fill = (Get-CachedBrush "#E2C08D" metal)
                             }
-                            Append-ChatFormatted -Text "`r`n⚠️ [СЕРВЕРЫ GOOGLE ПЕРЕГРУЖЕНЫ (503 No Capacity)]: Бэкенд Google временно не имеет свободных мощностей для модели '$($t.Model)'.`r`n💡 Решение: Переключите модель в выпадающем списке сверху на 'gemini-3.8-flash' (без High) или 'gemini-pro'.`r`n`r`n" -Color "#E2C08D" -Bold -Document $t.Document
+                            Append-ChatFormatted -Text "`r`n⚠️ [СЕРВЕРЫ GOOGLE ПЕРЕГРУЖЕНЫ (503 No Capacity)]: Бэкенд Google временно не имеет свободных мощностей для модели '$($t.Model)'.`r`n💡 Решение: Переключите модель в выпадающем списке сверху на 'gemini-3.8-flash-medium' или другую доступную модель.`r`n`r`n" -Color "#E2C08D" -Bold -Document $t.Document
                             if ($t -eq $global:ActiveTab) {
                                 $btnSend.IsEnabled = $true
                                 $btnSend.Content = "Отправить ↵"
@@ -8615,6 +8962,7 @@ $cmbProjects.Add_SelectionChanged({
 
 # Смена модели (пересчет лимитов контекста)
 $cmbModel.Add_SelectionChanged({
+    if ($global:SuppressModelComboEvent) { return }
     if ($global:ActiveTab -and $cmbModel.SelectedItem) {
         $global:ActiveTab.Model = $cmbModel.SelectedItem.ToString()
     }
@@ -8762,6 +9110,7 @@ function Update-AccountButtonText {
 
 function Update-LimitsAfterAccountChange {
     $global:LiveQuotaCache = $null
+    [void](Start-AsyncModelsSync)
     [void](Start-AsyncQuotaSync -OnCompleted { Update-LimitsDisplay })
 }
 
@@ -9768,6 +10117,13 @@ $window.Add_Closing({
     if ($limitsAutoRefreshTimer) {
         try { $limitsAutoRefreshTimer.Stop() } catch {}
     }
+    if ($global:ActiveModelsSyncJob) {
+        try {
+            if ($global:ActiveModelsSyncJob.Timer) { $global:ActiveModelsSyncJob.Timer.Stop() }
+            if ($global:ActiveModelsSyncJob.PowerShell) { $global:ActiveModelsSyncJob.PowerShell.Dispose() }
+        } catch {}
+        $global:ActiveModelsSyncJob = $null
+    }
     if ($global:TabsList) {
         foreach ($t in @($global:TabsList)) {
             if ($t.SyncState -and $t.SyncState.IsRunning -and $t.SyncState.ProcessId -gt 0) {
@@ -9798,6 +10154,9 @@ if ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1')) {
 
 $global:PerfState.Heartbeat = [DateTime]::UtcNow.Ticks
 Start-UiHangWatchdog
+$window.Add_Loaded({
+    [void](Start-AsyncModelsSync)
+})
 $window.ShowDialog() | Out-Null
 $uiTimer.Stop()
 if ($limitsAutoRefreshTimer) {

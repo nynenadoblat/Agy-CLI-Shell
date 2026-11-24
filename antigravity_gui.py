@@ -59,6 +59,152 @@ def get_launcher_config_path():
     return _user_data_file("launcher_config.json")
 
 
+DEFAULT_FALLBACK_MODELS = [
+    ("gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)"),
+    ("gemini-4-hydrogen-xhigh", "Gemini 4 Hydrogen (XHigh)"),
+    ("gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"),
+    ("gemini-4-hydrogen-low", "Gemini 4 Hydrogen (Low)"),
+    ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
+    ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
+    ("gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"),
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
+    ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
+    ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"),
+]
+
+
+def get_models_cache_path():
+    """Путь к общему кэшу списка моделей ~/.gemini/antigravity-cli/launcher_models_cache.json."""
+    return os.path.join(os.path.expanduser("~"), ".gemini", "antigravity-cli", "launcher_models_cache.json")
+
+
+def get_pretty_model_display_name(model_id: str) -> str:
+    """Формирует человекочитаемое имя модели по её идентификатору."""
+    if not model_id:
+        return "Gemini 3.8 Flash"
+    m = model_id.lower()
+    effort = ""
+    if m.endswith("-xhigh") or m == "xhigh":
+        effort = " (XHigh)"
+    elif m.endswith("-high") or m == "high":
+        effort = " (High)"
+    elif m.endswith("-medium") or m == "medium":
+        effort = " (Medium)"
+    elif m.endswith("-low") or m == "low":
+        effort = " (Low)"
+
+    if "hydrogen" in m:
+        return f"Gemini 4 Hydrogen{effort}"
+    if "gemini" in m and "3.8" in m:
+        return f"Gemini 3.8 Flash{effort}"
+    if "opus" in m:
+        if "3-5" in m or "3.5" in m:
+            return "Claude 3.5 Opus"
+        if "4-6" in m or "4.6" in m:
+            return "Claude Opus 4.6 (Thinking)"
+        return "Claude Opus"
+    if "claude" in m or "sonnet" in m:
+        if "3-7" in m or "3.7" in m:
+            return "Claude 3.7 Sonnet"
+        if "4-6" in m or "4.6" in m:
+            return "Claude Sonnet 4.6 (Thinking)"
+        return "Claude Sonnet"
+    if "gpt-oss" in m or "gpt" in m:
+        return f"GPT-OSS 120B{effort}"
+
+    parts = [p for p in re.split(r"[-_]+", model_id) if p]
+    return " ".join(p if re.match(r"^\d+(?:\.\d+)*$", p) else p.capitalize() for p in parts)
+
+
+def parse_agy_models_output(raw_output: str):
+    """Разбирает вывод команды `agy models` в список пар (id, display_name)."""
+    if not raw_output:
+        return []
+    result = []
+    seen = set()
+    for raw_line in raw_output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("Fetching available models"):
+            continue
+        parts = line.split("\t", 1)
+        model_id = parts[0].strip()
+        if not model_id or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$", model_id):
+            continue
+        key = model_id.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        disp = parts[1].strip() if len(parts) > 1 and parts[1].strip() else get_pretty_model_display_name(model_id)
+        result.append((model_id, disp))
+    return result
+
+
+def load_models_cache():
+    """Читает кэш доступных моделей с диска."""
+    cache_path = get_models_cache_path()
+    if not os.path.isfile(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        raw_models = data.get("models") if isinstance(data, dict) else None
+        if not raw_models:
+            return None
+        result = []
+        seen = set()
+        for item in raw_models:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or "").strip()
+            if not mid or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$", mid):
+                continue
+            key = mid.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            name = str(item.get("name") or "").strip() or get_pretty_model_display_name(mid)
+            result.append((mid, name))
+        return result or None
+    except Exception:
+        return None
+
+
+def save_models_cache(models):
+    """Сохраняет актуальный список моделей в общий кэш."""
+    if not models:
+        return
+    cache_path = get_models_cache_path()
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        payload = {
+            "updated_at": datetime.datetime.now().astimezone().isoformat(),
+            "models": [{"id": mid, "name": name} for mid, name in models],
+        }
+        tmp_path = cache_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, cache_path)
+    except Exception:
+        pass
+
+
+def get_available_models():
+    """Возвращает список моделей из кэша или встроенный фолбэк."""
+    cached = load_models_cache()
+    return cached if cached else list(DEFAULT_FALLBACK_MODELS)
+
+
+def get_model_display_name(model_id: str) -> str:
+    """Возвращает человекочитаемое название модели из кэша/фолбэка или автоформата."""
+    if not model_id:
+        return "Gemini 3.8 Flash"
+    key = model_id.strip().lower()
+    for mid, name in get_available_models():
+        if mid.lower() == key:
+            return name
+    return get_pretty_model_display_name(model_id)
+
+
 def get_projects_root():
     """Корневая папка проектов: ключ projectsRoot в launcher_config.json, иначе папка,
     в которой лежит папка лаунчера (проекты лежат рядом с ним)."""
@@ -392,28 +538,24 @@ def get_daily_usage_stats(model_name="gemini-3.8-flash-high", force_refresh=Fals
     """Возвращает статистику расхода квот API на основе реальных пулов Google AI Pro."""
     m = (model_name or "").lower()
     is_gemini = "gemini" in m
+    disp = get_model_display_name(model_name)
     if is_gemini:
-        disp = "Gemini 3.8 Flash"
         max_rpd = 1500
         max_rpm = 60
         max_tpm = 4000000
     elif "opus" in m:
-        disp = "Claude 3.5 Opus"
         max_rpd = 500
         max_rpm = 20
         max_tpm = 500000
     elif "claude" in m or "sonnet" in m:
-        disp = "Claude 3.7 Sonnet"
         max_rpd = 1000
         max_rpm = 50
         max_tpm = 1000000
     elif "gpt" in m:
-        disp = "GPT-OSS 120B"
         max_rpd = 800
         max_rpm = 30
         max_tpm = 800000
     else:
-        disp = "Gemini 3.8 Flash"
         max_rpd = 1500
         max_rpm = 60
         max_tpm = 4000000
@@ -1255,6 +1397,7 @@ class AntigravityGUI(tk.Tk):
         self._populate_projects()
         self._refresh_conversations_combo()
         self._check_queue_loop()
+        self.after(150, self._start_models_sync)
         self.protocol("WM_DELETE_WINDOW", self._on_window_closing)
 
     def _on_window_closing(self):
@@ -1281,6 +1424,56 @@ class AntigravityGUI(tk.Tk):
 
         save_launcher_config(win_data)
         self.destroy()
+
+    def _start_models_sync(self):
+        """Неблокирующее обновление списка доступных моделей через `agy models`."""
+        if not self.agy_path or not os.path.isfile(self.agy_path):
+            return
+
+        def _worker():
+            try:
+                startupinfo = None
+                creationflags = 0
+                if sys.platform == "win32":
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                res = subprocess.run(
+                    [self.agy_path, "models"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=11,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags,
+                )
+                if res.returncode == 0 and res.stdout:
+                    parsed = parse_agy_models_output(res.stdout)
+                    if parsed:
+                        save_models_cache(parsed)
+                        self.after(0, lambda m=parsed: self._apply_synced_models(m))
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_synced_models(self, models):
+        """Обновляет выпадающий список моделей с сохранением текущего выбора пользователя."""
+        if not models or not hasattr(self, "cmb_model"):
+            return
+        self.models_catalog = models
+        current = self.var_model.get()
+        ids = [m[0] for m in models]
+        if current and current not in ids:
+            ids.append(current)
+        if list(self.cmb_model.cget("values")) != ids:
+            self.cmb_model.configure(values=ids)
+        if current:
+            self.var_model.set(current)
+        elif ids:
+            default_id = "gemini-3.8-flash-high" if "gemini-3.8-flash-high" in ids else ids[0]
+            self.var_model.set(default_id)
 
     def _init_theme(self):
         """Настройка темной темы (VS Code Dark)."""
@@ -1366,16 +1559,11 @@ class AntigravityGUI(tk.Tk):
         row2.pack(fill=tk.X, pady=(0, 8))
 
         ttk.Label(row2, text="Модель:").pack(side=tk.LEFT, padx=(0, 4))
-        self.var_model = tk.StringVar(value="gemini-3.8-flash-high")
-        models = [
-            "gemini-3.8-flash-high",
-            "gemini-3.8-flash-medium",
-            "gemini-3.8-flash-low",
-            "claude-sonnet-4-6",
-            "claude-opus-4-6-thinking",
-            "gpt-oss-120b-medium"
-        ]
-        self.cmb_model = ttk.Combobox(row2, textvariable=self.var_model, values=models, state="readonly", width=22)
+        self.models_catalog = get_available_models()
+        models = [m[0] for m in self.models_catalog]
+        default_model = "gemini-3.8-flash-high" if "gemini-3.8-flash-high" in models else (models[0] if models else "gemini-3.8-flash-high")
+        self.var_model = tk.StringVar(value=default_model)
+        self.cmb_model = ttk.Combobox(row2, textvariable=self.var_model, values=models, state="readonly", width=26)
         self.cmb_model.pack(side=tk.LEFT, padx=(0, 14))
 
         ttk.Label(row2, text="Режим:").pack(side=tk.LEFT, padx=(0, 4))
@@ -1385,7 +1573,7 @@ class AntigravityGUI(tk.Tk):
 
         ttk.Label(row2, text="Рассуждение:").pack(side=tk.LEFT, padx=(0, 4))
         self.var_effort = tk.StringVar(value="auto")
-        self.cmb_effort = ttk.Combobox(row2, textvariable=self.var_effort, values=["auto", "high", "medium", "low"], state="readonly", width=9)
+        self.cmb_effort = ttk.Combobox(row2, textvariable=self.var_effort, values=["auto", "low", "medium", "high", "xhigh", "max"], state="readonly", width=9)
         self.cmb_effort.pack(side=tk.LEFT, padx=(0, 14))
 
         self.var_skip_perms = tk.BooleanVar(value=True)
