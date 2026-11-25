@@ -1989,6 +1989,66 @@ try {
 }
 Write-Host "[OK] Watchdog не убивает agy при пробуждении после фоновых задач (PLANNER_RESPONSE + SYSTEM_MESSAGE / >64KB tail)." -ForegroundColor Green
 
+# 29. Регрессия Watchdog: активная фоновая задача в транскрипте до вывода в stderr (кейс task-245 / timer / TimerCondition)
+$wdPendingTaskTail = @"
+{"step_index":244,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-25T00:04:16Z","content":"Давай попробуем"}
+{"step_index":245,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-25T00:20:38Z","content":"Created At: 2026-11-25T03:20:38+03:00\nTool is running as a background task with task id: c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-245\nTask Description: unity command script recompile_status\nTask logs are available at: file:///C:/log/task-245.log"}
+{"step_index":246,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-25T00:20:51Z","content":"Запускаю перекомпиляцию скриптов, ожидаю завершения задачи."}
+"@
+$wdPendingState = Get-TranscriptWatchdogState -TailText $wdPendingTaskTail -TruncatedStart $false
+if ($null -ne $wdPendingState.DoneStep -or -not $wdPendingState.HasPendingBgTasks -or ($wdPendingState.PendingTaskIds -notcontains "c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-245")) {
+    Write-Error "Watchdog должен блокировать завершение хода, пока в текущем ходе висит незавершённая фоновая задача task-245!"
+    exit 1
+}
+
+$wdCompletedTaskTail = @"
+$wdPendingTaskTail
+{"step_index":247,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-25T00:21:10Z","content":"[Message] timestamp=2026-11-25T00:21:10Z sender=c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-245 priority=MESSAGE_PRIORITY_HIGH content=Task id \"c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-245\" finished with result:\nOK"}
+{"step_index":248,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-25T00:21:20Z","content":"Проверка завершена успешно."}
+"@
+$wdCompletedState = Get-TranscriptWatchdogState -TailText $wdCompletedTaskTail -TruncatedStart $false
+if ($null -eq $wdCompletedState.DoneStep -or $wdCompletedState.DoneStep.step_index -ne 248 -or $wdCompletedState.HasPendingBgTasks) {
+    Write-Error "Watchdog не распознал завершение хода после завершения фоновой задачи task-245!"
+    exit 1
+}
+
+$wdTimerPendingTail = @"
+{"step_index":300,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-25T00:25:00Z","content":"Подожди 5 секунд"}
+{"step_index":301,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-25T00:25:01Z","content":"Tool is running as a background task with task id: c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-301\nTask Description: Timer: 5s, Prompt: Check status"}
+{"step_index":302,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-25T00:25:02Z","content":"Ожидаю таймер."}
+"@
+$wdTimerPendingState = Get-TranscriptWatchdogState -TailText $wdTimerPendingTail -TruncatedStart $false
+if ($null -ne $wdTimerPendingState.DoneStep -or -not $wdTimerPendingState.HasPendingBgTasks) {
+    Write-Error "Watchdog не защитил активный таймер schedule в текущем фрагменте хода!"
+    exit 1
+}
+
+$wdCancelledTimerTail = @"
+{"step_index":400,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-25T00:30:00Z","content":"Запусти и дождись"}
+{"step_index":401,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-25T00:30:01Z","content":"Tool is running as a background task with task id: c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-401\nTask Description: build.ps1"}
+{"step_index":402,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-25T00:30:02Z","content":"Tool is running as a background task with task id: c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-402\nTask Description: Timer: 30s, Prompt: Watch task-401"}
+{"step_index":403,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-25T00:30:10Z","content":"[Message] timestamp=2026-11-25T00:30:10Z sender=c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-401 priority=MESSAGE_PRIORITY_HIGH content=Task id \"c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-401\" finished with result:\nOK"}
+{"step_index":404,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-25T00:30:15Z","content":"Сборка завершена."}
+"@
+$wdCancelledTimerState = Get-TranscriptWatchdogState -TailText $wdCancelledTimerTail -TruncatedStart $false
+if ($null -eq $wdCancelledTimerState.DoneStep -or $wdCancelledTimerState.DoneStep.step_index -ne 404 -or $wdCancelledTimerState.HasPendingBgTasks) {
+    Write-Error "Отменённый через TimerCondition старый таймер task-402 не должен блокировать финальный PLANNER_RESPONSE!"
+    exit 1
+}
+
+$wdPriorTurnIgnoredTail = @"
+{"step_index":10,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-25T00:10:00Z","content":"Старый запрос"}
+{"step_index":11,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-25T00:10:01Z","content":"Tool is running as a background task with task id: c3f78e2f-213c-4870-b6ec-49c71d7a7ef9/task-11\nTask Description: old_cmd"}
+{"step_index":20,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-25T00:40:00Z","content":"Новый запрос"}
+{"step_index":21,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-25T00:40:05Z","content":"Ответ на новый запрос."}
+"@
+$wdPriorTurnState = Get-TranscriptWatchdogState -TailText $wdPriorTurnIgnoredTail -TruncatedStart $false
+if ($null -eq $wdPriorTurnState.DoneStep -or $wdPriorTurnState.DoneStep.step_index -ne 21 -or $wdPriorTurnState.HasPendingBgTasks) {
+    Write-Error "Незакрытая задача из предыдущего хода (до последнего USER_INPUT) не должна блокировать новый ход!"
+    exit 1
+}
+Write-Host "[OK] Watchdog корректно защищает незавершённые фоновые задачи и таймеры текущего хода (без ложных блокировок)." -ForegroundColor Green
+
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0
 } finally {

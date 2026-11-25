@@ -4491,24 +4491,34 @@ function Read-TranscriptTailInfo {
     }
 }
 
-function Get-TranscriptWatchdogDoneStep {
+function Get-TranscriptWatchdogState {
+    <#
+    .SYNOPSIS
+        Оценивает хвост транскрипта для Watchdog: завершён ли ход или в текущем ходе ещё есть незавершённые фоновые задачи.
+    #>
     param(
         [string]$TailText,
         [bool]$TruncatedStart = $false
     )
-    if ([string]::IsNullOrWhiteSpace($TailText)) { return $null }
+    $emptyState = [pscustomobject]@{
+        DoneStep          = $null
+        HasPendingBgTasks = $false
+        PendingTaskIds    = @()
+        LastStepCreatedAt = $null
+    }
+    if ([string]::IsNullOrWhiteSpace($TailText)) { return $emptyState }
 
     $textToScan = $TailText
     if ($TruncatedStart) {
         $nlIdx = $textToScan.IndexOf("`n")
         if ($nlIdx -lt 0) {
-            return $null
+            return $emptyState
         }
         $textToScan = $textToScan.Substring($nlIdx + 1)
     }
 
     $lines = @($textToScan -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($lines.Count -eq 0) { return $null }
+    if ($lines.Count -eq 0) { return $emptyState }
 
     # Проверяем строго последний шаг транскрипта: если после PLANNER_RESPONSE уже записан
     # SYSTEM_MESSAGE, USER_INPUT, GENERIC или другой шаг — ход продолжается, а не завершён.
@@ -4517,14 +4527,134 @@ function Get-TranscriptWatchdogDoneStep {
     try {
         $parsed = ConvertFrom-Json -InputObject $lastLine
     } catch {
-        return $null
+        return $emptyState
     }
-    if ($null -eq $parsed) { return $null }
-    if ($parsed.type -ne "PLANNER_RESPONSE") { return $null }
-    if ($parsed.status -ne "DONE" -or [string]::IsNullOrWhiteSpace($parsed.content)) { return $null }
-    if ($parsed.tool_calls -and @($parsed.tool_calls).Count -gt 0) { return $null }
+    if ($null -eq $parsed) { return $emptyState }
+    if ($parsed.type -ne "PLANNER_RESPONSE") { return $emptyState }
+    if ($parsed.status -ne "DONE" -or [string]::IsNullOrWhiteSpace($parsed.content)) { return $emptyState }
+    if ($parsed.tool_calls -and @($parsed.tool_calls).Count -gt 0) { return $emptyState }
 
-    return $parsed
+    # Ищем начало текущего хода (последний USER_INPUT) и отслеживаем фоновые задачи после него,
+    # чтобы Watchdog не убил agy из-за задержки вывода строки ожидания в stderr.
+    $turnStartIdx = 0
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        if ($lines[$i].Contains('"USER_INPUT"')) {
+            try {
+                $uObj = ConvertFrom-Json -InputObject $lines[$i]
+                if ($uObj -and $uObj.type -eq "USER_INPUT") {
+                    $turnStartIdx = $i + 1
+                    break
+                }
+            } catch {}
+        }
+    }
+
+    $pendingTasks = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $lastSysMsgIdx = -1
+
+    for ($i = $turnStartIdx; $i -lt $lines.Count; $i++) {
+        $raw = $lines[$i]
+        $hasGenericBg = ($raw.Contains('"GENERIC"') -and ($raw.Contains('Tool is running as a background task') -or $raw.Contains('Status: ') -or $raw.Contains('Killed')))
+        $hasSysMsg = $raw.Contains('"SYSTEM_MESSAGE"')
+        $hasManageKill = ($raw.Contains('"manage_task"') -and $raw.Contains('"kill"'))
+        if (-not $hasGenericBg -and -not $hasSysMsg -and -not $hasManageKill) { continue }
+
+        $stepObj = $null
+        try { $stepObj = ConvertFrom-Json -InputObject $raw } catch { continue }
+        if ($null -eq $stepObj) { continue }
+
+        $stepContent = [string]$stepObj.content
+        if ($stepObj.type -eq "GENERIC") {
+            if ($stepContent -match 'Tool is running as a background task with task id:\s*([^\s"''<>]+)') {
+                $tid = $Matches[1].Trim()
+                $isTimerOrCron = ($stepContent -match '(?m)^Task Description:\s*(?:Timer|Cron):')
+                $pendingTasks[$tid] = [pscustomobject]@{
+                    LaunchIdx = $i
+                    IsTimer   = $isTimerOrCron
+                }
+            } elseif ($stepContent -match '(?m)^Task:\s*([^\s\r\n]+)' -and $stepContent -match '(?m)^Status:\s*(?:COMPLETED|FAILED|CANCELLED|KILLED|STOPPED)\b') {
+                $doneTid = $Matches[1].Trim()
+                foreach ($k in @($pendingTasks.Keys)) {
+                    if ($k -eq $doneTid -or $k.EndsWith("/$doneTid") -or $doneTid.EndsWith("/$k")) {
+                        [void]$pendingTasks.Remove($k)
+                    }
+                }
+            }
+        } elseif ($stepObj.type -eq "SYSTEM_MESSAGE") {
+            $lastSysMsgIdx = $i
+            if ($stepContent -match 'All your subagents and background tasks have been stopped') {
+                $pendingTasks.Clear()
+                continue
+            }
+            $finishedIds = [System.Collections.Generic.List[string]]::new()
+            foreach ($m in [regex]::Matches($stepContent, 'sender=([^\s\]]+)')) {
+                [void]$finishedIds.Add($m.Groups[1].Value.Trim())
+            }
+            foreach ($m in [regex]::Matches($stepContent, 'Task id "([^"]+)" finished with result:')) {
+                [void]$finishedIds.Add($m.Groups[1].Value.Trim())
+            }
+            foreach ($fid in $finishedIds) {
+                foreach ($k in @($pendingTasks.Keys)) {
+                    if ($k -eq $fid -or $k.EndsWith("/$fid") -or $fid.EndsWith("/$k")) {
+                        [void]$pendingTasks.Remove($k)
+                    }
+                }
+            }
+        } elseif ($stepObj.type -eq "PLANNER_RESPONSE" -and $stepObj.tool_calls) {
+            foreach ($tc in @($stepObj.tool_calls)) {
+                if ($tc.name -eq "manage_task" -and $tc.args) {
+                    $act = [string]$tc.args.Action
+                    if ($act -match 'kill_all') {
+                        $pendingTasks.Clear()
+                    } elseif ($act -match 'kill') {
+                        $killTid = ([string]$tc.args.TaskId).Trim('"').Trim()
+                        if ($killTid) {
+                            foreach ($k in @($pendingTasks.Keys)) {
+                                if ($k -eq $killTid -or $k.EndsWith("/$killTid") -or $killTid.EndsWith("/$k")) {
+                                    [void]$pendingTasks.Remove($k)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    $activePendingIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($kv in $pendingTasks.GetEnumerator()) {
+        $info = $kv.Value
+        # Таймер/cron до последнего SYSTEM_MESSAGE мог быть отменён через TimerCondition при пробуждении;
+        # таймер в текущем фрагменте (после последнего SYSTEM_MESSAGE) и обычные фоновые задачи активны.
+        if (-not $info.IsTimer -or $info.LaunchIdx -gt $lastSysMsgIdx) {
+            [void]$activePendingIds.Add($kv.Key)
+        }
+    }
+
+    if ($activePendingIds.Count -gt 0) {
+        return [pscustomobject]@{
+            DoneStep          = $null
+            HasPendingBgTasks = $true
+            PendingTaskIds    = $activePendingIds.ToArray()
+            LastStepCreatedAt = $parsed.created_at
+        }
+    }
+
+    return [pscustomobject]@{
+        DoneStep          = $parsed
+        HasPendingBgTasks = $false
+        PendingTaskIds    = @()
+        LastStepCreatedAt = $parsed.created_at
+    }
+}
+
+function Get-TranscriptWatchdogDoneStep {
+    param(
+        [string]$TailText,
+        [bool]$TruncatedStart = $false
+    )
+    $wdState = Get-TranscriptWatchdogState -TailText $TailText -TruncatedStart:$TruncatedStart
+    return $wdState.DoneStep
 }
 
 function Get-ConversationContextStats {
@@ -7751,8 +7881,9 @@ function New-TabSession {
         LastTranscriptLength  = 0L
         # WaitingBackgroundTasks: agy написал в stderr, что модель закончила шаг и ждёт фоновые задачи или таймеры.
         # Пока поле стоит, проверка конца хода по транскрипту процесс не убивает: agy сам разбудит модель.
-        WaitingBackgroundTasks = $false
-        MinDoneStepTimeUtc     = [DateTime]::MinValue
+        WaitingBackgroundTasks    = $false
+        TranscriptPendingBgTasks  = $false
+        MinDoneStepTimeUtc        = [DateTime]::MinValue
     })
 
     $isLoaded = (-not $Lazy -or [string]::IsNullOrEmpty($ConversationId))
@@ -8531,7 +8662,7 @@ $uiTimer.Add_Tick({
                                 $tabItem.SyncState.LastDiskActivityUtc = [DateTime]::UtcNow
                             }
 
-                            $tailInfo = Read-TranscriptTailInfo -Path $tPath
+                            $tailInfo = Read-TranscriptTailInfo -Path $tPath -InitialBytes 262144
                             $tail = $tailInfo.Text
                             $apiTail = if ($tail.Length -gt 8192) { $tail.Substring($tail.Length - 8192) } else { $tail }
 
@@ -8555,30 +8686,36 @@ $uiTimer.Add_Tick({
                             }
 
                             # 2. Disk-Reconciliation Watchdog: детекция завершения хода на диске
-                            $foundDoneStep = Get-TranscriptWatchdogDoneStep -TailText $tail -TruncatedStart:$tailInfo.TruncatedStart
-
-                            if ($foundDoneStep -and $tabItem.SyncState.TurnStartTimeUtc -and $tabItem.SyncState.TurnStartTimeUtc -ne [DateTime]::MinValue) {
-                                $stepTimeUtc = $null
-                                if ($foundDoneStep.created_at) {
-                                    try { $stepTimeUtc = [DateTime]::Parse($foundDoneStep.created_at).ToUniversalTime() } catch {}
-                                }
-                                $minFloorUtc = if ($tabItem.SyncState.MinDoneStepTimeUtc -and $tabItem.SyncState.MinDoneStepTimeUtc -gt $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5)) {
+                            $wdState = Get-TranscriptWatchdogState -TailText $tail -TruncatedStart:$tailInfo.TruncatedStart
+                            $minFloorUtc = if ($tabItem.SyncState.TurnStartTimeUtc -and $tabItem.SyncState.TurnStartTimeUtc -ne [DateTime]::MinValue) {
+                                if ($tabItem.SyncState.MinDoneStepTimeUtc -and $tabItem.SyncState.MinDoneStepTimeUtc -gt $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5)) {
                                     $tabItem.SyncState.MinDoneStepTimeUtc
                                 } else {
                                     $tabItem.SyncState.TurnStartTimeUtc.AddSeconds(-5)
                                 }
+                            } else { $null }
+
+                            $lastStepTimeUtc = $null
+                            if ($wdState.LastStepCreatedAt) {
+                                try { $lastStepTimeUtc = [DateTime]::Parse($wdState.LastStepCreatedAt).ToUniversalTime() } catch {}
+                            }
+                            $tabItem.SyncState.TranscriptPendingBgTasks = ($wdState.HasPendingBgTasks -and $null -ne $minFloorUtc -and $null -ne $lastStepTimeUtc -and ($lastStepTimeUtc -ge $minFloorUtc))
+
+                            $foundDoneStep = $wdState.DoneStep
+
+                            if ($foundDoneStep -and $null -ne $minFloorUtc) {
+                                $stepTimeUtc = $lastStepTimeUtc
                                 if ($stepTimeUtc -and ($stepTimeUtc -ge $minFloorUtc)) {
                                     $idleStreamSec = if ($tabItem.SyncState.LastStreamActivityUtc -and $tabItem.SyncState.LastStreamActivityUtc -ne [DateTime]::MinValue) {
                                         ([DateTime]::UtcNow - $tabItem.SyncState.LastStreamActivityUtc).TotalSeconds
                                     } else { 999 }
 
-                                    # Если на диске ход завершен, а поток CLI молчит >= 2.5 сек (зависшие дочерние дескрипторы).
-                                    # Когда agy ждёт фоновые задачи или таймеры (WaitingBackgroundTasks), процесс не трогаем:
-                                    # agy сам разбудит модель, а убийство дерева процессов убило бы и саму фоновую задачу.
-                                    # Строка ожидания приходит в stderr через секунду-две после того, как ответ лёг на диск,
-                                    # поэтому ответу на диске даём 4 секунды (created_at записан с точностью до секунды).
+                                    # Если на диске ход завершен, а поток CLI молчит >= 6 сек (зависшие дочерние дескрипторы).
+                                    # Когда agy ждёт фоновые задачи или таймеры (WaitingBackgroundTasks или открытая задача в транскрипте),
+                                    # процесс не трогаем: agy сам разбудит модель, а убийство дерева процессов убило бы и фоновую задачу.
+                                    # 10 секунд даётся на пост-ходовые HTTP-запросы agy (summary, мониторы) до появления строки в stderr.
                                     $doneStepAgeSec = ([DateTime]::UtcNow - $stepTimeUtc).TotalSeconds
-                                    if ($idleStreamSec -ge 2.5 -and $doneStepAgeSec -ge 4 -and -not $tabItem.SyncState.WaitingBackgroundTasks) {
+                                    if ($idleStreamSec -ge 6 -and $doneStepAgeSec -ge 10 -and -not $tabItem.SyncState.WaitingBackgroundTasks -and -not $wdState.HasPendingBgTasks) {
                                         $tabItem.SyncState.TurnResolvedByWatchdog = $true
                                         if ($tabItem.SyncState.ProcessId -gt 0) {
                                             Stop-ProcessTree -processId $tabItem.SyncState.ProcessId
@@ -8620,7 +8757,7 @@ $uiTimer.Add_Tick({
                 } else { 0 }
                 $diskActive = ($tabItem.SyncState.LastDiskActivityUtc -and $tabItem.SyncState.LastDiskActivityUtc -ne [DateTime]::MinValue -and (([DateTime]::UtcNow - $tabItem.SyncState.LastDiskActivityUtc).TotalSeconds -lt 8))
 
-                if ($tabItem.SyncState.WaitingBackgroundTasks) {
+                if ($tabItem.SyncState.WaitingBackgroundTasks -or $tabItem.SyncState.TranscriptPendingBgTasks) {
                     $tabItem.StatusText = "⏳ Агент ждёт фоновую задачу или таймер и продолжит сам [Стоп для отмены] ($timeStr)"
                     $tabItem.StatusColor = "#4FC1FF"
                 } elseif ($idleSec -ge 60 -and -not $diskActive) {
@@ -9448,6 +9585,7 @@ function Start-AgentExecutionJob {
     $Tab.SyncState.StopRequested = $false
     $Tab.SyncState.TurnResolvedByWatchdog = $false
     $Tab.SyncState.WaitingBackgroundTasks = $false
+    $Tab.SyncState.TranscriptPendingBgTasks = $false
     # TurnGotText: пришёл ли за этот ход текст ответа модели. Без текста событие done пишет в чат предупреждение
     $Tab.SyncState.TurnGotText = $false
     $Tab.SyncState.ProcessId = 0
