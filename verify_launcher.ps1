@@ -2049,6 +2049,113 @@ if ($null -eq $wdPriorTurnState.DoneStep -or $wdPriorTurnState.DoneStep.step_ind
 }
 Write-Host "[OK] Watchdog корректно защищает незавершённые фоновые задачи и таймеры текущего хода (без ложных блокировок)." -ForegroundColor Green
 
+# 30. Регрессия Watchdog (кейс task-291 / 488bbef3): Reminder между schedule и PLANNER_RESPONSE,
+#     таймер без TimerCondition при пробуждении другой задачи, targeted TimerCondition, stderr "waiting up to", статус Update-LimitsDisplay
+$wdReminderAfterScheduleTail = @"
+{"step_index":289,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-26T01:03:29Z","content":"Изучи проект"}
+{"step_index":290,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T01:19:34Z","content":"Запустил перекомпиляцию.","tool_calls":[{"name":"schedule","args":{"DurationSeconds":18,"Prompt":"Unity domain reload should be complete now"}}]}
+{"step_index":291,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-26T01:19:37Z","content":"Created At: 2026-11-26T04:19:37+03:00\nTool is running as a background task with task id: 488bbef3-a993-4aa2-a41c-14f21720e81f/task-291\nTask Description: Timer: 18s, Prompt: Unity domain reload should be complete now"}
+{"step_index":292,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-26T01:19:37Z","content":"The following is a <SYSTEM_MESSAGE> not actually sent by the user. It is provided by the system as important information to pay attention to.\n\n<SYSTEM_MESSAGE>\nReminder: work efficiently. In this turn, issue in parallel every independent search, read and edit or write you need next.\n</SYSTEM_MESSAGE>"}
+{"step_index":293,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T01:19:37Z","content":"Ожидаю срабатывания таймера после перезагрузки домена Unity."}
+"@
+$wdRemState = Get-TranscriptWatchdogState -TailText $wdReminderAfterScheduleTail -TruncatedStart $false
+if ($null -ne $wdRemState.DoneStep -or -not $wdRemState.HasPendingBgTasks -or ($wdRemState.PendingTaskIds -notcontains "488bbef3-a993-4aa2-a41c-14f21720e81f/task-291")) {
+    Write-Error "Watchdog должен защищать таймер task-291 даже если между schedule и PLANNER_RESPONSE agy вставил SYSTEM_MESSAGE Reminder!"
+    exit 1
+}
+
+$wdTimerWokenTail = @"
+$wdReminderAfterScheduleTail
+{"step_index":294,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-26T01:19:55Z","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T01:19:55Z sender=488bbef3-a993-4aa2-a41c-14f21720e81f/task-291 priority=MESSAGE_PRIORITY_HIGH content=Unity domain reload should be complete now\n</SYSTEM_MESSAGE>"}
+{"step_index":295,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T01:20:05Z","content":"Домен перезагружен, готово."}
+"@
+$wdTimerWokenState = Get-TranscriptWatchdogState -TailText $wdTimerWokenTail -TruncatedStart $false
+if ($null -eq $wdTimerWokenState.DoneStep -or $wdTimerWokenState.DoneStep.step_index -ne 295 -or $wdTimerWokenState.HasPendingBgTasks) {
+    Write-Error "Watchdog должен разрешать завершение хода после срабатывания самого таймера task-291!"
+    exit 1
+}
+
+$wdUnrelatedWakeupTail = @"
+{"step_index":500,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-26T02:00:00Z","content":"Запусти сборку и поставь таймер"}
+{"step_index":501,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-26T02:00:01Z","content":"Tool is running as a background task with task id: sess-1/task-501\nTask Description: build.ps1"}
+{"step_index":502,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T02:00:02Z","content":"Ставлю независимый таймер.","tool_calls":[{"name":"schedule","args":{"DurationSeconds":30,"Prompt":"Check scene"}}]}
+{"step_index":503,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-26T02:00:03Z","content":"Tool is running as a background task with task id: sess-1/task-503\nTask Description: Timer: 30s, Prompt: Check scene"}
+{"step_index":504,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-26T02:00:06Z","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T02:00:06Z sender=sess-1/task-501 priority=MESSAGE_PRIORITY_HIGH content=Task id \"sess-1/task-501\" finished with result:\nOK\n</SYSTEM_MESSAGE>"}
+{"step_index":505,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T02:00:07Z","content":"Сборка завершена, продолжаю ждать независимый таймер."}
+"@
+$wdUnrelatedState = Get-TranscriptWatchdogState -TailText $wdUnrelatedWakeupTail -TruncatedStart $false
+if ($null -ne $wdUnrelatedState.DoneStep -or -not $wdUnrelatedState.HasPendingBgTasks -or ($wdUnrelatedState.PendingTaskIds -notcontains "sess-1/task-503")) {
+    Write-Error "Таймер без TimerCondition (never) не должен сниматься при завершении другой фоновой задачи!"
+    exit 1
+}
+
+$wdTargetedCondTail = @"
+{"step_index":600,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-26T02:10:00Z","content":"Дождись task-601"}
+{"step_index":601,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-26T02:10:01Z","content":"Tool is running as a background task with task id: sess-2/task-601\nTask Description: unity test"}
+{"step_index":602,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T02:10:02Z","content":"Ставлю таймер с TimerCondition.","tool_calls":[{"name":"schedule","args":{"DurationSeconds":45,"TimerCondition":"\"task-601\"","Prompt":"Check task-601"}}]}
+{"step_index":603,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-26T02:10:03Z","content":"Tool is running as a background task with task id: sess-2/task-603\nTask Description: Timer: 45s, Prompt: Check task-601"}
+{"step_index":604,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-26T02:10:12Z","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T02:10:12Z sender=sess-2/task-601 priority=MESSAGE_PRIORITY_HIGH content=Task id \"sess-2/task-601\" finished with result:\nOK\n</SYSTEM_MESSAGE>"}
+{"step_index":605,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T02:10:15Z","content":"Тесты пройдены."}
+"@
+$wdTargetedState = Get-TranscriptWatchdogState -TailText $wdTargetedCondTail -TruncatedStart $false
+if ($null -eq $wdTargetedState.DoneStep -or $wdTargetedState.DoneStep.step_index -ne 605 -or $wdTargetedState.HasPendingBgTasks) {
+    Write-Error "Таймер с TimerCondition=task-601 должен сниматься после завершения task-601!"
+    exit 1
+}
+
+$wdStatusDoneTail = @"
+{"step_index":700,"source":"USER","type":"USER_INPUT","status":"DONE","created_at":"2026-11-26T02:20:00Z","content":"Проверь задачу"}
+{"step_index":701,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-11-26T02:20:01Z","content":"Tool is running as a background task with task id: sess-3/task-701\nTask Description: slow cmd"}
+{"step_index":702,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-11-26T02:20:10Z","content":"Task: sess-3/task-701\nStatus: DONE\nLog: C:/tmp/task-701.log"}
+{"step_index":703,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-26T02:20:12Z","content":"Задача завершена."}
+"@
+$wdStatusDoneState = Get-TranscriptWatchdogState -TailText $wdStatusDoneTail -TruncatedStart $false
+if ($null -eq $wdStatusDoneState.DoneStep -or $wdStatusDoneState.DoneStep.step_index -ne 703 -or $wdStatusDoneState.HasPendingBgTasks) {
+    Write-Error "Get-TranscriptWatchdogState должен корректно снимать задачу при GENERIC Status: DONE без исключений!"
+    exit 1
+}
+
+$guiSrcWatchdog = [System.IO.File]::ReadAllText($guiPs1, [System.Text.Encoding]::UTF8)
+$waitMatch = [regex]::Match($guiSrcWatchdog, '\$waitingBgPattern\s*=\s*''([^'']+)''')
+if (-not $waitMatch.Success) {
+    Write-Error "В AntigravityGUI.ps1 не найден шаблон `$waitingBgPattern для stderr!"
+    exit 1
+}
+$waitRx = $waitMatch.Groups[1].Value
+foreach ($sampleStderr in @(
+    "root agent idle; waiting for 1 background task(s) to finish",
+    "root agent idle; waiting up to 18s for 1 background task(s)",
+    "root agent idle; waiting up to 1m30s for 2 background task(s)"
+)) {
+    if ($sampleStderr -notmatch $waitRx) {
+        Write-Error "Шаблон `$waitingBgPattern не распознал строку stderr agy: '$sampleStderr'"
+        exit 1
+    }
+}
+
+$wdCurTab = $global:ActiveTab
+$origWdStatus = $wdCurTab.StatusText
+$origWdColor = $wdCurTab.StatusColor
+$origWdRunning = $wdCurTab.SyncState.IsRunning
+$origTxtStatus = $txtStatus.Text
+try {
+    $wdCurTab.SyncState.IsRunning = $false
+    $wdCurTab.StatusText = "Готов к работе (выполнено за 16м 22.8с)"
+    $wdCurTab.StatusColor = "#4CAF50"
+    $txtStatus.Text = $wdCurTab.StatusText
+    Update-LimitsDisplay -modelName "gemini-3.8-flash-high"
+    if ($txtStatus.Text -ne "Готов к работе (выполнено за 16м 22.8с)") {
+        Write-Error "Update-LimitsDisplay затёр статус готовой вкладки! Получено: '$($txtStatus.Text)'"
+        exit 1
+    }
+} finally {
+    $wdCurTab.SyncState.IsRunning = $origWdRunning
+    $wdCurTab.StatusText = $origWdStatus
+    $wdCurTab.StatusColor = $origWdColor
+    $txtStatus.Text = $origTxtStatus
+}
+Write-Host "[OK] Watchdog (Reminder/TimerCondition/stderr waiting up to) и сохранение статуса Update-LimitsDisplay валидны." -ForegroundColor Green
+
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0
 } finally {

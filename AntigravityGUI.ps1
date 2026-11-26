@@ -4491,6 +4491,47 @@ function Read-TranscriptTailInfo {
     }
 }
 
+function Test-TranscriptWakeupSystemMessage {
+    <#
+    .SYNOPSIS
+        Определяет, является ли SYSTEM_MESSAGE реальным уведомлением/пробуждением (доставка результата задачи,
+        срабатывание таймера, системный Notice), а не служебным напоминанием вроде Reminder: work efficiently.
+    #>
+    param([string]$Content)
+    if ([string]::IsNullOrWhiteSpace($Content)) { return $false }
+    if ($Content -match '(?m)^\[Message\]\s+timestamp=' -or
+        $Content -match '<SYSTEM_MESSAGE>\s*\[Message\]\s+timestamp=' -or
+        $Content -match '(?m)(?:^|\s)sender=[^\s\]]+' -or
+        $Content -match 'Task id "[^"]+" (?:finished|was cancel(?:l)?ed) with result:' -or
+        $Content -match 'All your subagents and background tasks have been stopped') {
+        return $true
+    }
+    return $false
+}
+
+function Test-TranscriptIdMatch {
+    <#
+    .SYNOPSIS
+        Сравнивает полный ID задачи (<convId>/task-N) и короткий или полный идентификатор.
+    #>
+    param([string]$Left, [string]$Right)
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $false }
+    return ($Left -eq $Right -or $Left.EndsWith("/$Right") -or $Right.EndsWith("/$Left"))
+}
+
+function Remove-PendingTranscriptTask {
+    param(
+        [Parameter(Mandatory=$true)]$PendingTasks,
+        [string]$TargetId
+    )
+    if ([string]::IsNullOrWhiteSpace($TargetId)) { return }
+    foreach ($k in @($PendingTasks.Keys)) {
+        if (Test-TranscriptIdMatch -Left $k -Right $TargetId) {
+            [void]$PendingTasks.Remove($k)
+        }
+    }
+}
+
 function Get-TranscriptWatchdogState {
     <#
     .SYNOPSIS
@@ -4550,14 +4591,15 @@ function Get-TranscriptWatchdogState {
     }
 
     $pendingTasks = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $lastSysMsgIdx = -1
+    $pendingScheduleMeta = [System.Collections.Generic.Queue[object]]::new()
+    $lastWakeupSysMsgIdx = -1
 
     for ($i = $turnStartIdx; $i -lt $lines.Count; $i++) {
         $raw = $lines[$i]
-        $hasGenericBg = ($raw.Contains('"GENERIC"') -and ($raw.Contains('Tool is running as a background task') -or $raw.Contains('Status: ') -or $raw.Contains('Killed')))
+        $hasGenericBg = ($raw.Contains('"GENERIC"') -and ($raw.Contains('Tool is running as a background task') -or $raw.Contains('Status: ') -or $raw.Contains('Killed') -or $raw.Contains('Wait cancelled')))
         $hasSysMsg = $raw.Contains('"SYSTEM_MESSAGE"')
-        $hasManageKill = ($raw.Contains('"manage_task"') -and $raw.Contains('"kill"'))
-        if (-not $hasGenericBg -and -not $hasSysMsg -and -not $hasManageKill) { continue }
+        $hasPlannerControl = ($raw.Contains('"PLANNER_RESPONSE"') -and ($raw.Contains('"schedule"') -or $raw.Contains('"manage_task"')))
+        if (-not $hasGenericBg -and -not $hasSysMsg -and -not $hasPlannerControl) { continue }
 
         $stepObj = $null
         try { $stepObj = ConvertFrom-Json -InputObject $raw } catch { continue }
@@ -4568,53 +4610,85 @@ function Get-TranscriptWatchdogState {
             if ($stepContent -match 'Tool is running as a background task with task id:\s*([^\s"''<>]+)') {
                 $tid = $Matches[1].Trim()
                 $isTimerOrCron = ($stepContent -match '(?m)^Task Description:\s*(?:Timer|Cron):')
-                $pendingTasks[$tid] = [pscustomobject]@{
-                    LaunchIdx = $i
-                    IsTimer   = $isTimerOrCron
+                $timerCond = $null
+                if ($isTimerOrCron -and $pendingScheduleMeta.Count -gt 0) {
+                    $meta = $pendingScheduleMeta.Dequeue()
+                    $timerCond = $meta.TimerCondition
                 }
-            } elseif ($stepContent -match '(?m)^Task:\s*([^\s\r\n]+)' -and $stepContent -match '(?m)^Status:\s*(?:COMPLETED|FAILED|CANCELLED|KILLED|STOPPED)\b') {
+                $pendingTasks[$tid] = [pscustomobject]@{
+                    LaunchIdx      = $i
+                    IsTimer        = $isTimerOrCron
+                    TimerCondition = $timerCond
+                }
+            } elseif ($stepContent -match 'Wait cancelled' -and $pendingScheduleMeta.Count -gt 0) {
+                [void]$pendingScheduleMeta.Dequeue()
+            } elseif ($stepContent -match '(?m)^Task:\s*([^\s\r\n]+)') {
                 $doneTid = $Matches[1].Trim()
-                foreach ($k in @($pendingTasks.Keys)) {
-                    if ($k -eq $doneTid -or $k.EndsWith("/$doneTid") -or $doneTid.EndsWith("/$k")) {
-                        [void]$pendingTasks.Remove($k)
-                    }
+                if ($stepContent -match '(?m)^Status:\s*(?:DONE|COMPLETED|FAILED|CANCELLED|CANCELED|KILLED|STOPPED)\b') {
+                    Remove-PendingTranscriptTask -PendingTasks $pendingTasks -TargetId $doneTid
                 }
             }
         } elseif ($stepObj.type -eq "SYSTEM_MESSAGE") {
-            $lastSysMsgIdx = $i
+            if (-not (Test-TranscriptWakeupSystemMessage -Content $stepContent)) {
+                # Напоминания вроде "Reminder: work efficiently..." не пробуждают задачи и не отменяют TimerCondition
+                continue
+            }
+            $lastWakeupSysMsgIdx = $i
             if ($stepContent -match 'All your subagents and background tasks have been stopped') {
                 $pendingTasks.Clear()
+                $pendingScheduleMeta.Clear()
                 continue
             }
             $finishedIds = [System.Collections.Generic.List[string]]::new()
             foreach ($m in [regex]::Matches($stepContent, 'sender=([^\s\]]+)')) {
                 [void]$finishedIds.Add($m.Groups[1].Value.Trim())
             }
-            foreach ($m in [regex]::Matches($stepContent, 'Task id "([^"]+)" finished with result:')) {
+            foreach ($m in [regex]::Matches($stepContent, 'Task id "([^"]+)" (?:finished|was cancel(?:l)?ed) with result:')) {
                 [void]$finishedIds.Add($m.Groups[1].Value.Trim())
             }
             foreach ($fid in $finishedIds) {
-                foreach ($k in @($pendingTasks.Keys)) {
-                    if ($k -eq $fid -or $k.EndsWith("/$fid") -or $fid.EndsWith("/$k")) {
+                Remove-PendingTranscriptTask -PendingTasks $pendingTasks -TargetId $fid
+            }
+
+            # Снимаем таймеры, чьё TimerCondition удовлетворено пришедшим сообщением
+            foreach ($k in @($pendingTasks.Keys)) {
+                $info = $pendingTasks[$k]
+                if (-not $info.IsTimer -or [string]::IsNullOrWhiteSpace($info.TimerCondition) -or $info.TimerCondition -eq "never") {
+                    continue
+                }
+                if ($info.TimerCondition -eq "any") {
+                    if ($i -gt $info.LaunchIdx) {
                         [void]$pendingTasks.Remove($k)
+                    }
+                    continue
+                }
+                foreach ($fid in $finishedIds) {
+                    if (Test-TranscriptIdMatch -Left $fid -Right $info.TimerCondition) {
+                        [void]$pendingTasks.Remove($k)
+                        break
                     }
                 }
             }
         } elseif ($stepObj.type -eq "PLANNER_RESPONSE" -and $stepObj.tool_calls) {
+            $pendingScheduleMeta.Clear()
             foreach ($tc in @($stepObj.tool_calls)) {
-                if ($tc.name -eq "manage_task" -and $tc.args) {
-                    $act = [string]$tc.args.Action
-                    if ($act -match 'kill_all') {
+                if ($tc.name -eq "schedule" -and $tc.args) {
+                    $condRaw = if ($tc.args.PSObject.Properties['TimerCondition']) { [string]$tc.args.TimerCondition } else { "" }
+                    $cond = $condRaw.Trim().Trim('"').Trim()
+                    $hasCron = ($tc.args.PSObject.Properties['CronExpression'] -and -not [string]::IsNullOrWhiteSpace(([string]$tc.args.CronExpression).Trim().Trim('"')))
+                    $effCond = if ($hasCron -or [string]::IsNullOrWhiteSpace($cond)) { "never" } else { $cond }
+                    $pendingScheduleMeta.Enqueue([pscustomobject]@{
+                        TimerCondition = $effCond
+                        IsCron         = $hasCron
+                    })
+                } elseif ($tc.name -eq "manage_task" -and $tc.args) {
+                    $act = ([string]$tc.args.Action).Trim().Trim('"').Trim()
+                    if ($act -eq 'kill_all') {
                         $pendingTasks.Clear()
-                    } elseif ($act -match 'kill') {
-                        $killTid = ([string]$tc.args.TaskId).Trim('"').Trim()
-                        if ($killTid) {
-                            foreach ($k in @($pendingTasks.Keys)) {
-                                if ($k -eq $killTid -or $k.EndsWith("/$killTid") -or $killTid.EndsWith("/$k")) {
-                                    [void]$pendingTasks.Remove($k)
-                                }
-                            }
-                        }
+                        $pendingScheduleMeta.Clear()
+                    } elseif ($act -eq 'kill') {
+                        $killTid = ([string]$tc.args.TaskId).Trim().Trim('"').Trim()
+                        Remove-PendingTranscriptTask -PendingTasks $pendingTasks -TargetId $killTid
                     }
                 }
             }
@@ -4624,9 +4698,9 @@ function Get-TranscriptWatchdogState {
     $activePendingIds = [System.Collections.Generic.List[string]]::new()
     foreach ($kv in $pendingTasks.GetEnumerator()) {
         $info = $kv.Value
-        # Таймер/cron до последнего SYSTEM_MESSAGE мог быть отменён через TimerCondition при пробуждении;
-        # таймер в текущем фрагменте (после последнего SYSTEM_MESSAGE) и обычные фоновые задачи активны.
-        if (-not $info.IsTimer -or $info.LaunchIdx -gt $lastSysMsgIdx) {
+        # Если TimerCondition известен (напр. "never" из schedule без TimerCondition), таймер остаётся активным до своего пробуждения;
+        # если метаданные PLANNER_RESPONSE обрезаны или отсутствуют — опираемся на последний реальный wakeup SYSTEM_MESSAGE.
+        if (-not $info.IsTimer -or $info.TimerCondition -or $info.LaunchIdx -gt $lastWakeupSysMsgIdx) {
             [void]$activePendingIds.Add($kv.Key)
         }
     }
@@ -5779,8 +5853,11 @@ function Update-LimitsDisplay {
         } else {
             if ($btnSend) { $btnSend.IsEnabled = $true }
             if ($txtPromptInput) { $txtPromptInput.IsEnabled = $true }
-            if ($txtStatus) { $txtStatus.Text = "Готов к работе" }
-            if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal) }
+            if (-not $activeTab.LoadingJob) {
+                $readyText = if ($activeTab.StatusText -and $activeTab.StatusColor -eq "#4CAF50") { $activeTab.StatusText } else { "Готов к работе" }
+                if ($txtStatus) { $txtStatus.Text = $readyText }
+                if ($statusDot) { $statusDot.Fill = (Get-CachedBrush "#4CAF50" metal) }
+            }
         }
     }
 }
@@ -9649,9 +9726,10 @@ function Start-AgentExecutionJob {
             $proc.StartInfo = $psi
             $proc.Start() | Out-Null
 
-            # stderr читаем по строке во время хода: строка "root agent idle; waiting for N background task(s)" значит,
+            # stderr читаем по строке во время хода: строка "root agent idle; waiting ... for N background task(s)" значит,
             # что модель закончила шаг, а agy ждёт фоновые задачи или таймеры и потом сам продолжит ход.
             # $pumpStderr забирает готовые строки в $errSb. Вызывается через точку, чтобы менять переменные этой задачи.
+            $waitingBgPattern = '(?i)waiting(?:\s+up\s+to\s+\S+)?\s+for\s+\d+\s+background\s+task'
             $errSb = [System.Text.StringBuilder]::new()
             $errReadTask = $proc.StandardError.ReadLineAsync()
             $pumpStderr = {
@@ -9659,7 +9737,7 @@ function Start-AgentExecutionJob {
                     $errLine = $errReadTask.Result
                     if ($null -eq $errLine) { $errReadTask = $null; break }
                     [void]$errSb.AppendLine($errLine)
-                    if ($errLine -match '(?i)waiting for \d+ background task') { $st.WaitingBackgroundTasks = $true }
+                    if ($errLine -match $waitingBgPattern) { $st.WaitingBackgroundTasks = $true }
                     $errReadTask = $proc.StandardError.ReadLineAsync()
                 }
             }
@@ -9705,13 +9783,14 @@ function Start-AgentExecutionJob {
                         # Модель снова работает (таймер или фоновая задача её разбудили): ожидание кончилось.
                         # Поднимаем MinDoneStepTimeUtc, чтобы старый пред-фоновый PLANNER_RESPONSE никогда не сработал в Watchdog.
                         if ($evt.event -eq "step_update" -and $evt.step_update.state -eq "ACTIVE") {
-                            if ($st.WaitingBackgroundTasks) {
+                            if ($st.WaitingBackgroundTasks -or $st.TranscriptPendingBgTasks) {
                                 $wakeFloor = [DateTime]::UtcNow.AddSeconds(-2)
                                 if ($wakeFloor -gt $st.MinDoneStepTimeUtc) {
                                     $st.MinDoneStepTimeUtc = $wakeFloor
                                 }
                             }
                             $st.WaitingBackgroundTasks = $false
+                            $st.TranscriptPendingBgTasks = $false
                         }
                         switch ($evt.event) {
                             "init" {
@@ -9802,7 +9881,7 @@ function Start-AgentExecutionJob {
                         $trimmed = $el.Trim()
                         if ($trimmed -match '(?i)warning:\s*--mode.*sandbox is not available|continuing in the default mode') { continue }
                         if ($trimmed -match '(?i)^warning:') { continue }
-                        if ($trimmed -match '(?i)waiting for \d+ background task') { continue }
+                        if ($trimmed -match $waitingBgPattern) { continue }
                         $realErrors += $trimmed
                     }
                 }
