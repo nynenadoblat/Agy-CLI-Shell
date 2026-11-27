@@ -2156,6 +2156,152 @@ try {
 }
 Write-Host "[OK] Watchdog (Reminder/TimerCondition/stderr waiting up to) и сохранение статуса Update-LimitsDisplay валидны." -ForegroundColor Green
 
+# 31. Проверка рендеринга картинок в чате, резолва путей и прикрепления из просмотрщика
+$imgTestDir = Join-Path $launcherDir "scratch\test_chat_images"
+$imgSubDir = Join-Path $imgTestDir "sub folder"
+New-Item -ItemType Directory -Path $imgSubDir -Force | Out-Null
+try {
+    $samplePng = Join-Path $imgSubDir "sample shot (1).png"
+    $bmp1 = [System.Drawing.Bitmap]::new(320, 180)
+    $g1 = [System.Drawing.Graphics]::FromImage($bmp1)
+    $g1.Clear([System.Drawing.Color]::FromArgb(30, 50, 80))
+    $g1.FillRectangle([System.Drawing.Brushes]::Orange, 20, 20, 120, 80)
+    $g1.Dispose()
+    $bmp1.Save($samplePng, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp1.Dispose()
+
+    $iconRelPath = "app_icon.png"
+    $origTabWs = $global:ActiveTab.Workspace
+    $origTxtWs = $txtWorkspace.Text
+    try {
+        $global:ActiveTab.Workspace = $launcherDir
+        $txtWorkspace.Text = $launcherDir
+
+        # 31.1. Резолв путей (file:///, пробелы/скобки, относительный путь, фрагмент #L, запрет https)
+        $uriSpaces = "file:///" + ($samplePng.Replace('\', '/').Replace(' ', '%20'))
+        if ((Resolve-ChatImageFilePath -RawTarget $uriSpaces -Workspace $launcherDir) -ne (Convert-Path -LiteralPath $samplePng)) {
+            Write-Error "Resolve-ChatImageFilePath не распознал file:/// URI с пробелами и скобками!"
+            exit 1
+        }
+        if ((Resolve-ChatImageFilePath -RawTarget "<$samplePng>" -Workspace $launcherDir) -ne (Convert-Path -LiteralPath $samplePng)) {
+            Write-Error "Resolve-ChatImageFilePath не распознал путь в угловых скобках <...>!"
+            exit 1
+        }
+        if ((Resolve-ChatImageFilePath -RawTarget "$iconRelPath#L1" -Workspace $launcherDir) -ne (Convert-Path -LiteralPath (Join-Path $launcherDir $iconRelPath))) {
+            Write-Error "Resolve-ChatImageFilePath не распознал относительный путь с #L1!"
+            exit 1
+        }
+        if ($null -ne (Resolve-ChatImageFilePath -RawTarget "https://example.com/pic.png" -Workspace $launcherDir)) {
+            Write-Error "Resolve-ChatImageFilePath не должен загружать внешние HTTP(S) URL как локальные файлы!"
+            exit 1
+        }
+
+        # 31.2. Parse-InlineMarkdownRuns: ![alt](...) и [link](local_image)
+        $colImgs = [System.Collections.Generic.List[psobject]]::new()
+        $lineMixed = "Смотри: ![Скрин](<$samplePng>) и [Иконка](file:///$($launcherDir.Replace('\','/'))/app_icon.png) и [web](https://example.com) и [exe](file:///C:/a.exe)"
+        $inls = Parse-InlineMarkdownRuns -LineText $lineMixed -BaseColor "#D4D4D4" -FontSize 13.0 -Workspace $launcherDir -CollectedImages $colImgs
+        if ($colImgs.Count -ne 2) {
+            Write-Error "Parse-InlineMarkdownRuns должен собрать 2 локальных изображения, собрано: $($colImgs.Count)"
+            exit 1
+        }
+        $hasStrayBang = $false
+        $imgLinksCount = 0
+        foreach ($inl in $inls) {
+            if ($inl -is [System.Windows.Documents.Run] -and $inl.Text -match '!\s*$') { $hasStrayBang = $true }
+            if ($inl -is [System.Windows.Documents.Hyperlink] -and $inl.Tag -and $inl.Tag.Path) { $imgLinksCount++ }
+        }
+        if ($hasStrayBang -or $imgLinksCount -ne 2) {
+            Write-Error "Parse-InlineMarkdownRuns некорректно обработал inline-картинки (hasStrayBang=$hasStrayBang, imgLinksCount=$imgLinksCount)!"
+            exit 1
+        }
+
+        # 31.3. Append-MarkdownFormatted: отдельная картинка, список, код-блок, отсутствующий файл
+        $imgDoc = [System.Windows.Documents.FlowDocument]::new()
+        $mdSampleImgs = @"
+Отдельный кадр:
+![Мой кадр](<$samplePng>)
+
+- ![Иконка в списке](app_icon.png)
+
+``````markdown
+![Не должно рендериться](app_icon.png)
+``````
+
+![Отсутствующая](missing_pic_xyz.png)
+"@
+        Append-MarkdownFormatted -Text $mdSampleImgs -Document $imgDoc -BaseColor "#D4D4D4" -FontSize 13.0
+
+        $cardContainers = @()
+        $missingFound = $false
+        foreach ($blk in $imgDoc.Blocks) {
+            if ($blk -is [System.Windows.Documents.BlockUIContainer] -and $blk.Child -is [System.Windows.Controls.Border]) {
+                $ch = $blk.Child
+                if ($ch.Child -is [System.Windows.Controls.StackPanel]) {
+                    $cardContainers += $ch
+                } elseif ($ch.Child -is [System.Windows.Controls.TextBlock] -and $ch.Child.Text -match 'файл не найден') {
+                    $missingFound = $true
+                }
+            }
+        }
+        if ($cardContainers.Count -ne 2) {
+            Write-Error "Append-MarkdownFormatted должен создать ровно 2 карточки изображений (отдельная + список, исключая код-блок), создано: $($cardContainers.Count)"
+            exit 1
+        }
+        if (-not $missingFound) {
+            Write-Error "Append-MarkdownFormatted должен выводить аккуратную заглушку для отсутствующего файла изображения!"
+            exit 1
+        }
+
+        # 31.4. Show-ImageViewerWindow: кнопка прямого прикрепления и безопасное сохранение _annotated.png в .antigravity\attachments
+        Clear-AttachedImages
+        $viewerWin = Show-ImageViewerWindow -FilePath $samplePng -Title "Мой кадр" -ReturnWindow
+        if (-not $viewerWin -or -not $viewerWin.Tag -or -not $viewerWin.Tag.BtnAttachToMsg) {
+            Write-Error "Show-ImageViewerWindow не создал кнопку прямого прикрепления BtnAttachToMsg!"
+            exit 1
+        }
+        # Прикрепление без маркеров
+        & $viewerWin.Tag.PerformAttach
+        if ($global:AttachedImages.Count -ne 1 -or $global:AttachedImages[0].FilePath -ne (Convert-Path -LiteralPath $samplePng) -or $borderAttachments.Visibility -ne [System.Windows.Visibility]::Visible) {
+            Write-Error "Кнопка Прикрепить в просмотрщике не добавила изображение во вложения!"
+            exit 1
+        }
+
+        # Рисование маркера и сохранение _annotated.png (должно попасть в .antigravity\attachments, а не в sub folder!)
+        $vState = $viewerWin.Tag
+        $rectEl = [System.Windows.Shapes.Rectangle]::new()
+        $vState.ShapesList.Add([pscustomobject]@{ Type = "Rect"; Element = $rectEl; X = 10; Y = 10; W = 80; H = 40; Color = "#FF3333" })
+        $applyOk = & $vState.PerformApply
+        if (-not $applyOk) {
+            Write-Error "PerformApply в Show-ImageViewerWindow вернул false!"
+            exit 1
+        }
+        $attItem = $global:AttachedImages[0]
+        if (-not $attItem.HasAnnotation -or -not $attItem.AnnotatedFilePath -or -not (Test-Path -LiteralPath $attItem.AnnotatedFilePath)) {
+            Write-Error "PerformApply не сохранил файл разметки AnnotatedFilePath!"
+            exit 1
+        }
+        $expectedAttachDir = [System.IO.Path]::GetFullPath((Get-AttachmentsDirectory)).TrimEnd('\')
+        $actualAnnotDir = [System.IO.Path]::GetFullPath((Split-Path -Parent $attItem.AnnotatedFilePath)).TrimEnd('\')
+        if (-not $actualAnnotDir.Equals($expectedAttachDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Error "Файл разметки должен сохраняться в .antigravity\attachments ($expectedAttachDir), а не в исходной папке ($actualAnnotDir)!"
+            exit 1
+        }
+        $viewerWin.Close()
+        if ($attItem.AnnotatedFilePath -and (Test-Path -LiteralPath $attItem.AnnotatedFilePath)) {
+            Remove-Item -LiteralPath $attItem.AnnotatedFilePath -Force -ErrorAction SilentlyContinue
+        }
+        Clear-AttachedImages
+    } finally {
+        $global:ActiveTab.Workspace = $origTabWs
+        $txtWorkspace.Text = $origTxtWs
+    }
+} finally {
+    if (Test-Path -LiteralPath $imgTestDir) {
+        Remove-Item -LiteralPath $imgTestDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+Write-Host "[OK] Рендеринг картинок в чате, резолв путей, кнопка прикрепления и безопасное сохранение разметки валидны." -ForegroundColor Green
+
 Write-Host "=== Все тесты AntigravityLauncher успешно пройдены! (ExitCode 0) ===" -ForegroundColor Green
 exit 0
 } finally {

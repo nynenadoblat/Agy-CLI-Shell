@@ -877,57 +877,236 @@ function New-ArrowGeometry {
     return $geom
 }
 
+function Test-IsImageFilePath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $clean = $Path.Trim() -replace '[?#].*$', ''
+    if ([string]::IsNullOrWhiteSpace($clean)) { return $false }
+    $ext = [System.IO.Path]::GetExtension($clean).ToLowerInvariant()
+    return ($ext -in @(".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
+}
+
+function Get-DocumentTabContext {
+    param($Document = $null)
+    $ws = if ($txtWorkspace -and -not [string]::IsNullOrWhiteSpace($txtWorkspace.Text)) { $txtWorkspace.Text } else { $null }
+    $cid = $global:CurrentConversationId
+    if ($Document -and $global:TabsList) {
+        foreach ($tabItem in $global:TabsList) {
+            if ($tabItem -and $tabItem.Document -eq $Document) {
+                if (-not [string]::IsNullOrWhiteSpace($tabItem.Workspace)) { $ws = $tabItem.Workspace }
+                $cid = $tabItem.ConversationId
+                break
+            }
+        }
+    }
+    return [pscustomobject]@{
+        Workspace      = $ws
+        ConversationId = $cid
+    }
+}
+
+function Resolve-ChatImageFilePath {
+    param(
+        [string]$RawTarget,
+        [string]$Workspace = $null,
+        [string]$ConversationId = $null
+    )
+    if ([string]::IsNullOrWhiteSpace($RawTarget)) { return $null }
+    $t = $RawTarget.Trim()
+    if ($t.StartsWith("<") -and $t.EndsWith(">") -and $t.Length -ge 2) {
+        $t = $t.Substring(1, $t.Length - 2).Trim()
+    }
+    if (($t.StartsWith('"') -and $t.EndsWith('"')) -or ($t.StartsWith("'") -and $t.EndsWith("'"))) {
+        if ($t.Length -ge 2) { $t = $t.Substring(1, $t.Length - 2).Trim() }
+    }
+    if ([string]::IsNullOrWhiteSpace($t)) { return $null }
+    if ($t -match '^(?i)(https?|mailto|conversation|data):') { return $null }
+
+    $effWs = if (-not [string]::IsNullOrWhiteSpace($Workspace)) { $Workspace } elseif ($txtWorkspace -and -not [string]::IsNullOrWhiteSpace($txtWorkspace.Text)) { $txtWorkspace.Text } else { $null }
+    $effCid = if (-not [string]::IsNullOrWhiteSpace($ConversationId)) { $ConversationId } else { $global:CurrentConversationId }
+
+    $variants = [System.Collections.Generic.List[string]]::new()
+    $variants.Add($t)
+    $stripped = $t -replace '(#L\d+(?:-L?\d+)?|#[^\s]*|\?[^\s]*)$', ''
+    if ($stripped -and $stripped -ne $t) {
+        $variants.Add($stripped)
+    }
+
+    foreach ($v in $variants) {
+        $p = $v
+        if ($p -match '^(?i)file://') {
+            if ($p -match '^(?i)file:///([A-Za-z]:[/\\].*)$') {
+                $p = $Matches[1]
+            } elseif ($p -match '^(?i)file://([A-Za-z]:[/\\].*)$') {
+                $p = $Matches[1]
+            } else {
+                try {
+                    $u = [System.Uri]::new($p)
+                    if ($u.IsFile) { $p = $u.LocalPath }
+                } catch {
+                    $p = $p -replace '^(?i)file:///*', ''
+                }
+            }
+        }
+        try {
+            if ($p -match '%[0-9A-Fa-f]{2}') {
+                $p = [System.Uri]::UnescapeDataString($p)
+            }
+        } catch {}
+        $p = $p.Replace('/', '\').Trim()
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        if (-not (Test-IsImageFilePath -Path $p)) { continue }
+
+        $candidates = [System.Collections.Generic.List[string]]::new()
+        $isRooted = $false
+        try { $isRooted = [System.IO.Path]::IsPathRooted($p) } catch {}
+
+        if ($isRooted) {
+            $candidates.Add($p)
+        }
+        if (-not $isRooted -or $p -match '^\\[^\\]') {
+            $rel = $p.TrimStart('\')
+            if (-not [string]::IsNullOrWhiteSpace($effWs)) {
+                $candidates.Add((Join-Path $effWs $rel))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($launcherDir)) {
+                $candidates.Add((Join-Path $launcherDir $rel))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($effCid)) {
+                $brainConvDir = Join-Path $env:USERPROFILE ".gemini\antigravity-cli\brain\$effCid"
+                $candidates.Add((Join-Path $brainConvDir $rel))
+            }
+        }
+        $leaf = [System.IO.Path]::GetFileName($p)
+        if (-not [string]::IsNullOrWhiteSpace($leaf)) {
+            if (-not [string]::IsNullOrWhiteSpace($effWs)) {
+                $candidates.Add((Join-Path $effWs ".antigravity\attachments\$leaf"))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($launcherDir)) {
+                $candidates.Add((Join-Path $launcherDir "attachments\$leaf"))
+            }
+        }
+
+        foreach ($cand in $candidates) {
+            if ([string]::IsNullOrWhiteSpace($cand)) { continue }
+            try {
+                if (Test-Path -LiteralPath $cand -PathType Leaf) {
+                    return (Convert-Path -LiteralPath $cand)
+                }
+            } catch {}
+        }
+    }
+    return $null
+}
+
+function Load-BitmapImageFromFile {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [int]$MaxDecodeWidth = 0
+    )
+    if ([string]::IsNullOrWhiteSpace($FilePath) -or -not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        return $null
+    }
+    $ms = $null
+    try {
+        $fs = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $ms = [System.IO.MemoryStream]::new()
+            $fs.CopyTo($ms)
+        } finally {
+            $fs.Dispose()
+        }
+
+        $ms.Position = 0
+        $nativeW = 0
+        $nativeH = 0
+        try {
+            $dec = [System.Windows.Media.Imaging.BitmapDecoder]::Create(
+                $ms,
+                [System.Windows.Media.Imaging.BitmapCreateOptions]::DelayCreation,
+                [System.Windows.Media.Imaging.BitmapCacheOption]::None
+            )
+            if ($dec -and $dec.Frames -and $dec.Frames.Count -gt 0) {
+                $nativeW = [int][math]::Round($dec.Frames[0].PixelWidth)
+                $nativeH = [int][math]::Round($dec.Frames[0].PixelHeight)
+            }
+        } catch {}
+
+        $ms.Position = 0
+        $bi = [System.Windows.Media.Imaging.BitmapImage]::new()
+        $bi.BeginInit()
+        $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        if ($MaxDecodeWidth -gt 0 -and $nativeW -gt $MaxDecodeWidth) {
+            $bi.DecodePixelWidth = $MaxDecodeWidth
+        }
+        $bi.StreamSource = $ms
+        $bi.EndInit()
+        $bi.Freeze()
+
+        if ($nativeW -le 0) { $nativeW = [int][math]::Round($bi.PixelWidth) }
+        if ($nativeH -le 0) { $nativeH = [int][math]::Round($bi.PixelHeight) }
+
+        return [pscustomobject]@{
+            ImageSource = $bi
+            Width       = $nativeW
+            Height      = $nativeH
+        }
+    } catch {
+        return $null
+    } finally {
+        if ($ms) { try { $ms.Dispose() } catch {} }
+    }
+}
+
 function Show-ImageViewerWindow {
     param(
         [Parameter(Mandatory=$true)][string]$FilePath,
         [string]$Title = "",
-        [psobject]$AttachedItem = $null
+        [psobject]$AttachedItem = $null,
+        [switch]$ReturnWindow
     )
     if ([string]::IsNullOrWhiteSpace($FilePath)) { return }
+    $isHeadlessEnv = ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1'))
 
     # Интеллектуальный поиск физического файла
-    $targetPath = $FilePath
-    if (-not (Test-Path $targetPath)) {
-        $fn = [System.IO.Path]::GetFileName($FilePath)
-        $candidates = @(
-            (Join-Path $launcherDir "attachments\$fn"),
-            ($(if ($txtWorkspace -and $txtWorkspace.Text) { Join-Path $txtWorkspace.Text ".antigravity\attachments\$fn" }))
-        )
-        $found = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-        if ($found) {
-            $targetPath = $found
-        } else {
-            [System.Windows.MessageBox]::Show("Файл изображения не найден на диске:`n$FilePath", "Изображение недоступно", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
-            return
-        }
+    $targetPath = Resolve-ChatImageFilePath -RawTarget $FilePath
+    if (-not $targetPath -and (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        $targetPath = (Convert-Path -LiteralPath $FilePath)
     }
-
-    try {
-        $bi = [System.Windows.Media.Imaging.BitmapImage]::new()
-        $bi.BeginInit()
-        $bi.UriSource = [System.Uri]::new((Convert-Path $targetPath))
-        $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-        $bi.EndInit()
-        $bi.Freeze()
-    } catch {
-        [System.Windows.MessageBox]::Show("Не удалось загрузить изображение:`n$($_.ToString())", "Ошибка открытия", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+    if (-not $targetPath) {
+        if (-not $isHeadlessEnv) {
+            [System.Windows.MessageBox]::Show("Файл изображения не найден на диске:`n$FilePath", "Изображение недоступно", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+        }
         return
     }
 
+    if (-not $AttachedItem -and $global:AttachedImages) {
+        $AttachedItem = $global:AttachedImages | Where-Object { $_.FilePath -eq $targetPath -or $_.AnnotatedFilePath -eq $targetPath } | Select-Object -First 1
+    }
+
+    $loadedImg = Load-BitmapImageFromFile -FilePath $targetPath
+    if (-not $loadedImg -or -not $loadedImg.ImageSource) {
+        if (-not $isHeadlessEnv) {
+            [System.Windows.MessageBox]::Show("Не удалось загрузить изображение:`n$targetPath", "Ошибка открытия", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        }
+        return
+    }
+    $bi = $loadedImg.ImageSource
+
     $fileName = [System.IO.Path]::GetFileName($targetPath)
     $dispTitle = if ($Title) { $Title } else { $fileName }
-    $fileInfo = Get-Item $targetPath -ErrorAction SilentlyContinue
+    $fileInfo = Get-Item -LiteralPath $targetPath -ErrorAction SilentlyContinue
     $fileSizeKB = if ($fileInfo) { [math]::Round($fileInfo.Length / 1024) } else { 0 }
-    $w = [math]::Round($bi.PixelWidth)
-    $h = [math]::Round($bi.PixelHeight)
+    $w = $loadedImg.Width
+    $h = $loadedImg.Height
     $baseThickness = [math]::Max(3.0, [math]::Round($w / 350.0))
 
     # Создание окна просмотра
     $viewer = [System.Windows.Window]::new()
     $viewer.Title = "Просмотр изображения: $dispTitle ($w × $h)"
-    $viewer.Width = [math]::Min(1200, [math]::Max(800, $w + 80))
+    $viewer.Width = [math]::Min(1200, [math]::Max(880, $w + 80))
     $viewer.Height = [math]::Min(880, [math]::Max(580, $h + 170))
-    $viewer.MinWidth = 650
+    $viewer.MinWidth = 760
     $viewer.MinHeight = 480
     $viewer.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterOwner
     if ($window -and $window.IsVisible) {
@@ -966,11 +1145,24 @@ function Show-ImageViewerWindow {
     $pnlActions.Orientation = [System.Windows.Controls.Orientation]::Horizontal
     [System.Windows.Controls.DockPanel]::SetDock($pnlActions, [System.Windows.Controls.Dock]::Right)
 
+    $btnAttachToMsg = [System.Windows.Controls.Button]::new()
+    $btnAttachToMsg.Content = "📎 Прикрепить"
+    $btnAttachToMsg.ToolTip = "Прикрепить изображение к следующему сообщению (с маркерами, если они нарисованы)"
+    $btnAttachToMsg.Background = (Get-CachedBrush "#1F6FEB" metal)
+    $btnAttachToMsg.Foreground = [System.Windows.Media.Brushes]::White
+    $btnAttachToMsg.FontWeight = [System.Windows.FontWeights]::SemiBold
+    $btnAttachToMsg.BorderBrush = (Get-CachedBrush "#388BFD" metal)
+    $btnAttachToMsg.BorderThickness = [System.Windows.Thickness]::new(1)
+    $btnAttachToMsg.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $btnAttachToMsg.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
+    $btnAttachToMsg.Cursor = [System.Windows.Input.Cursors]::Hand
+    [void]$pnlActions.Children.Add($btnAttachToMsg)
+
     $btnSys = [System.Windows.Controls.Button]::new()
     $btnSys.Content = "🖼️ В системе"
     $btnSys.ToolTip = "Открыть во внешнем системном просмотрщике Windows"
-    $btnSys.Background = (Get-CachedBrush "#238636" metal)
-    $btnSys.Foreground = [System.Windows.Media.Brushes]::White
+    $btnSys.Background = (Get-CachedBrush "#2D333B" metal)
+    $btnSys.Foreground = (Get-CachedBrush "#C9D1D9" metal)
     $btnSys.BorderThickness = [System.Windows.Thickness]::new(0)
     $btnSys.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
     $btnSys.Margin = [System.Windows.Thickness]::new(6, 6, 0, 6)
@@ -1375,6 +1567,7 @@ function Show-ImageViewerWindow {
         BtnUndo            = $btnUndo
         BtnClear           = $btnClear
         BtnApply           = $btnApply
+        BtnAttachToMsg     = $btnAttachToMsg
         ModeButtons        = $modeButtons
         ColorButtons       = $colorButtons
         CurrentMode        = "Pan"
@@ -1398,6 +1591,7 @@ function Show-ImageViewerWindow {
         TargetPath         = $targetPath
         AttachedItem       = $AttachedItem
     })
+    $viewer.Tag = $state
 
     # Обработчики режимов
     $SwitchMode = {
@@ -1777,7 +1971,7 @@ function Show-ImageViewerWindow {
     $PerformApply = {
         if ($state.ShapesList.Count -eq 0) {
             [System.Windows.MessageBox]::Show("Сначала нарисуйте хотя бы один маркер (рамку или стрелку) на изображении.", "Разметка не найдена", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
-            return
+            return $false
         }
 
         try {
@@ -1809,24 +2003,47 @@ function Show-ImageViewerWindow {
             $rtb = [System.Windows.Media.Imaging.RenderTargetBitmap]::new($state.Width, $state.Height, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
             $rtb.Render($dv)
 
-            # 2. Сохранение файла
-            $dir = [System.IO.Path]::GetDirectoryName($state.TargetPath)
+            # 2. Сохранение файла (внутри .antigravity\attachments, чтобы не засорять внешние папки)
+            $attachDir = Get-AttachmentsDirectory
+            $srcDir = [System.IO.Path]::GetDirectoryName($state.TargetPath)
             $baseFn = [System.IO.Path]::GetFileNameWithoutExtension($state.TargetPath)
             $cleanBase = $baseFn -replace '_annotated$', ''
-            $annotatedPath = Join-Path $dir "${cleanBase}_annotated.png"
+
+            $targetAtt = $state.AttachedItem
+            if (-not $targetAtt) {
+                $targetAtt = $global:AttachedImages | Where-Object { $_.FilePath -eq $state.TargetPath -or $_.FilePath -eq (Join-Path $srcDir "${cleanBase}.png") } | Select-Object -First 1
+            }
+
+            $isAlreadyInAttachDir = $false
+            try {
+                $normSrc = [System.IO.Path]::GetFullPath($srcDir).TrimEnd('\')
+                $normAtt = [System.IO.Path]::GetFullPath($attachDir).TrimEnd('\')
+                $isAlreadyInAttachDir = $normSrc.Equals($normAtt, [System.StringComparison]::OrdinalIgnoreCase)
+            } catch {}
+
+            if ($isAlreadyInAttachDir) {
+                $annotatedPath = Join-Path $srcDir "${cleanBase}_annotated.png"
+            } elseif ($targetAtt -and $targetAtt.PSObject.Properties['AnnotatedFilePath'] -and $targetAtt.AnnotatedFilePath -and (Test-Path -LiteralPath (Split-Path -Parent $targetAtt.AnnotatedFilePath))) {
+                $annotatedPath = $targetAtt.AnnotatedFilePath
+            } else {
+                $candAnnot = Join-Path $attachDir "${cleanBase}_annotated.png"
+                if ((Test-Path -LiteralPath $candAnnot) -and ($global:AttachedImages | Where-Object { $_.AnnotatedFilePath -eq $candAnnot -and $_.FilePath -ne $state.TargetPath })) {
+                    $annotatedPath = Join-Path $attachDir "${cleanBase}_$(Get-Date -Format 'HHmmss_fff')_annotated.png"
+                } else {
+                    $annotatedPath = $candAnnot
+                }
+            }
 
             $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
             $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($rtb))
             $fsOut = [System.IO.FileStream]::new($annotatedPath, [System.IO.FileMode]::Create)
-            $encoder.Save($fsOut)
-            $fsOut.Close()
-
-            # 3. Привязка к списку вложений
-            $targetAtt = $state.AttachedItem
-            if (-not $targetAtt) {
-                $targetAtt = $global:AttachedImages | Where-Object { $_.FilePath -eq $state.TargetPath -or $_.FilePath -eq (Join-Path $dir "${cleanBase}.png") } | Select-Object -First 1
+            try {
+                $encoder.Save($fsOut)
+            } finally {
+                $fsOut.Close()
             }
 
+            # 3. Привязка к списку вложений
             $savedShapesList = [System.Collections.Generic.List[psobject]]::new()
             foreach ($sh in $state.ShapesList) {
                 if ($sh.Type -eq "Rect") {
@@ -1866,22 +2083,25 @@ function Show-ImageViewerWindow {
                 } else {
                     $targetAtt | Add-Member -NotePropertyName "SavedShapes" -NotePropertyValue $savedShapesList -Force
                 }
+                $state.AttachedItem = $targetAtt
             } else {
+                $srcLen = 0
+                try { $srcLen = (Get-Item -LiteralPath $state.TargetPath -ErrorAction SilentlyContinue).Length } catch {}
                 $newItem = [pscustomobject]@{
                     ItemType          = "Image"
                     FilePath          = $state.TargetPath
                     FileName          = [System.IO.Path]::GetFileName($state.TargetPath)
                     DisplayName       = $cleanBase
-                    DimInfo           = "$($state.Width)x$($state.Height) • $([math]::Round((Get-Item $state.TargetPath).Length / 1024)) KB"
+                    DimInfo           = "$($state.Width)x$($state.Height) • $([math]::Round($srcLen / 1024)) KB"
                     ImageSource       = $state.BitmapImage
                     Icon              = "🖼️"
                     AnnotatedFilePath = $annotatedPath
                     HasAnnotation     = $true
                     SavedShapes       = $savedShapesList
                 }
-                $global:AttachedImages.Add($newItem)
+                [void]$global:AttachedImages.Add($newItem)
+                $state.AttachedItem = $newItem
             }
-
 
             Render-AttachmentsUI
 
@@ -1895,17 +2115,61 @@ function Show-ImageViewerWindow {
                 $t.Stop()
             }.GetNewClosure())
             $t.Start()
+            return $true
         } catch {
             [System.Windows.MessageBox]::Show("Не удалось сохранить разметку: $($_.ToString())", "Ошибка сохранения", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+            return $false
         }
     }.GetNewClosure()
-    $btnApply.Add_Click({ & $PerformApply }.GetNewClosure())
+    $btnApply.Add_Click({ [void](& $PerformApply) }.GetNewClosure())
+
+    $PerformAttach = {
+        if ($state.ShapesList.Count -gt 0) {
+            $ok = & $PerformApply
+            if (-not $ok) { return }
+        } else {
+            $targetAtt = $state.AttachedItem
+            if (-not $targetAtt) {
+                $targetAtt = $global:AttachedImages | Where-Object { $_.FilePath -eq $state.TargetPath -or $_.AnnotatedFilePath -eq $state.TargetPath } | Select-Object -First 1
+            }
+            if ($targetAtt) {
+                if ($targetAtt.PSObject.Properties['HasAnnotation'] -and $targetAtt.HasAnnotation) {
+                    $targetAtt.HasAnnotation = $false
+                    $targetAtt.AnnotatedFilePath = $null
+                    $targetAtt.SavedShapes = $null
+                    Render-AttachmentsUI
+                }
+                $state.AttachedItem = $targetAtt
+            } else {
+                Add-AttachedItem -Path $state.TargetPath
+                $state.AttachedItem = $global:AttachedImages | Where-Object { $_.FilePath -eq $state.TargetPath } | Select-Object -First 1
+            }
+        }
+        if ($state.BtnAttachToMsg) {
+            $state.BtnAttachToMsg.Content = "✅ Прикреплено!"
+            $state.BtnAttachToMsg.Background = (Get-CachedBrush "#238636" metal)
+            $tAtt = [System.Windows.Threading.DispatcherTimer]::new()
+            $tAtt.Interval = [TimeSpan]::FromMilliseconds(1800)
+            $tAtt.Add_Tick({
+                $state.BtnAttachToMsg.Content = "📎 Прикрепить"
+                $state.BtnAttachToMsg.Background = (Get-CachedBrush "#1F6FEB" metal)
+                $tAtt.Stop()
+            }.GetNewClosure())
+            $tAtt.Start()
+        }
+    }.GetNewClosure()
+    $btnAttachToMsg.Add_Click({ & $PerformAttach }.GetNewClosure())
+
+    $state.PerformApply = $PerformApply
+    $state.PerformAttach = $PerformAttach
 
     # Горячие клавиши
     $viewer.Add_KeyDown({
         param($s, $e)
         if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
             $viewer.Close()
+        } elseif ($e.Key -eq [System.Windows.Input.Key]::Enter -and ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control)) {
+            & $PerformAttach
         } elseif ($e.Key -eq [System.Windows.Input.Key]::Z -and [System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) {
             & $PerformUndo
         } elseif ($e.Key -eq [System.Windows.Input.Key]::H) {
@@ -1928,10 +2192,21 @@ function Show-ImageViewerWindow {
         }
     }.GetNewClosure())
 
+    $viewer.Add_Closed({
+        try {
+            if ($global:AttachedImages.Count -gt 0 -and $window -and $window.IsVisible -and $txtPromptInput) {
+                $txtPromptInput.Focus() | Out-Null
+            }
+        } catch {}
+    }.GetNewClosure())
+
     $viewer.Content = $rootGrid
     if (-not ($Headless -or $ValidateOnly -or ($env:ANTIGRAVITY_HEADLESS -eq '1'))) {
         $viewer.Show()
         $viewer.Focus() | Out-Null
+    }
+    if ($ReturnWindow) {
+        return $viewer
     }
 }
 
@@ -2187,17 +2462,14 @@ function Add-AttachedItem {
         $isImg = ($ext -in @(".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
 
         if ($isImg) {
-            $bi = [System.Windows.Media.Imaging.BitmapImage]::new()
-            $bi.BeginInit()
-            $bi.UriSource = [System.Uri]::new($fullPath)
-            $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-            $bi.EndInit()
-            $bi.Freeze()
+            $loadedAtt = Load-BitmapImageFromFile -FilePath $fullPath
+            if (-not $loadedAtt -or -not $loadedAtt.ImageSource) { return }
+            $bi = $loadedAtt.ImageSource
 
             $fn = [System.IO.Path]::GetFileName($fullPath)
             $fileSize = [math]::Round((Get-Item -LiteralPath $fullPath).Length / 1024)
-            $w = [math]::Round($bi.PixelWidth)
-            $h = [math]::Round($bi.PixelHeight)
+            $w = $loadedAtt.Width
+            $h = $loadedAtt.Height
 
             $item = [pscustomobject]@{
                 ItemType          = "Image"
@@ -2970,11 +3242,44 @@ function Convert-LatexInline {
     return $s
 }
 
+function New-ChatImageHyperlink {
+    param(
+        [Parameter(Mandatory=$true)][string]$LinkText,
+        [Parameter(Mandatory=$true)][string]$ImagePath,
+        [string]$DisplayTitle = ""
+    )
+    $hl = [System.Windows.Documents.Hyperlink]::new()
+    try { $hl.NavigateUri = [System.Uri]::new($ImagePath) } catch {}
+    $hlRun = [System.Windows.Documents.Run]::new($LinkText)
+    $hl.Inlines.Add($hlRun)
+    $hl.Foreground = Get-CachedBrush "#4FC1FF"
+    $hl.TextDecorations = [System.Windows.TextDecorations]::Underline
+    $hl.ToolTip = "Нажмите для просмотра и разметки маркерами`r`n$ImagePath"
+    $hl.Cursor = [System.Windows.Input.Cursors]::Hand
+    $hl.Tag = [pscustomobject]@{
+        Path  = $ImagePath
+        Title = if ($DisplayTitle) { $DisplayTitle } else { $LinkText }
+    }
+    $hl.Add_RequestNavigate({
+        param($s, $e)
+        $e.Handled = $true
+        try {
+            if ($s.Tag -and $s.Tag.Path) {
+                Show-ImageViewerWindow -FilePath $s.Tag.Path -Title $s.Tag.Title
+            }
+        } catch {}
+    })
+    return $hl
+}
+
 function Parse-InlineMarkdownRuns {
     param(
         [string]$LineText,
         [string]$BaseColor = "#D4D4D4",
-        [double]$FontSize = 13.0
+        [double]$FontSize = 13.0,
+        [string]$Workspace = $null,
+        [string]$ConversationId = $null,
+        [System.Collections.Generic.List[psobject]]$CollectedImages = $null
     )
     $runs = [System.Collections.Generic.List[System.Windows.Documents.Inline]]::new()
     if ([string]::IsNullOrEmpty($LineText)) { return $runs }
@@ -2985,7 +3290,7 @@ function Parse-InlineMarkdownRuns {
     $codeBg = Get-CachedBrush "#28282B"
     $codeFont = [System.Windows.Media.FontFamily]::new("Consolas, Cascadia Code, Courier New")
 
-    $pattern = '(?<link>\[(?<linktext>[^\]\r\n]+)\]\((?<linkurl>[^\)\s\r\n]+)\))|(?<codeblock>`[^`\r\n]+`)|(?<bolditalic>\*\*\*[^*]+?\*\*\*|___[^_]+?___)|(?<bold>\*\*[^*]+?\*\*|__[^_]+?__)|(?<italic>\*[^*]+?\*|(?<=\s|^)_[^_]+?_(?=\s|$|[.,!?:;]))|(?<strike>~~[^~]+?~~)|(?<math>(?<![\w$\\])\$(?=[^\s$])(?<tex>[^$\r\n]+?)(?<=[^\s$\\])\$(?![\w$]))'
+    $pattern = '(?<image>!\[(?<imgalt>[^\]\r\n]*)\]\((?:<(?<imgurl_angle>[^>\r\n]+)>|(?<imgurl>(?:[^()\r\n]|\([^()\r\n]*\))+?))(?:\s+"[^"\r\n]*")?\))|(?<link>\[(?<linktext>[^\]\r\n]+)\]\((?:<(?<linkurl_angle>[^>\r\n]+)>|(?<linkimgurl>[^\)\r\n]+?\.(?i:png|jpg|jpeg|webp|bmp|gif)(?:[?#][^\)\s\r\n]*)?)|(?<linkurl>[^\)\s\r\n]+))\))|(?<codeblock>`[^`\r\n]+`)|(?<bolditalic>\*\*\*[^*]+?\*\*\*|___[^_]+?___)|(?<bold>\*\*[^*]+?\*\*|__[^_]+?__)|(?<italic>\*[^*]+?\*|(?<=\s|^)_[^_]+?_(?=\s|$|[.,!?:;]))|(?<strike>~~[^~]+?~~)|(?<math>(?<![\w$\\])\$(?=[^\s$])(?<tex>[^$\r\n]+?)(?<=[^\s$\\])\$(?![\w$]))'
 
     $lastIndex = 0
     $matches = [regex]::Matches($LineText, $pattern)
@@ -2999,10 +3304,87 @@ function Parse-InlineMarkdownRuns {
         }
 
         $val = $m.Value
-        if ($m.Groups["link"].Success) {
+        if ($m.Groups["image"].Success) {
+            $imgAlt = $m.Groups["imgalt"].Value.Trim()
+            $rawImgUrl = if ($m.Groups["imgurl_angle"].Success) { $m.Groups["imgurl_angle"].Value.Trim() } else { $m.Groups["imgurl"].Value.Trim() }
+            $dispImgLabel = $imgAlt
+            if ([string]::IsNullOrWhiteSpace($dispImgLabel)) {
+                try { $dispImgLabel = [System.IO.Path]::GetFileName(($rawImgUrl -replace '[?#].*$', '').Replace('/', '\')) } catch {}
+            }
+            if ([string]::IsNullOrWhiteSpace($dispImgLabel)) { $dispImgLabel = "Изображение" }
+
+            $resolvedImg = Resolve-ChatImageFilePath -RawTarget $rawImgUrl -Workspace $Workspace -ConversationId $ConversationId
+            if ($resolvedImg) {
+                if ($null -ne $CollectedImages) {
+                    $CollectedImages.Add([pscustomobject]@{
+                        Path          = $resolvedImg
+                        Caption       = $imgAlt
+                        RawUrl        = $rawImgUrl
+                        IsImageSyntax = $true
+                    })
+                }
+                $iconRun = [System.Windows.Documents.Run]::new("🖼️ ")
+                $iconRun.Foreground = $baseBrush
+                $runs.Add($iconRun)
+                $runs.Add((New-ChatImageHyperlink -LinkText $dispImgLabel -ImagePath $resolvedImg -DisplayTitle $dispImgLabel))
+            } elseif ($rawImgUrl -match '^https?://' -and $rawImgUrl -notmatch '\.exe($|\?)') {
+                try {
+                    $hl = [System.Windows.Documents.Hyperlink]::new()
+                    $hl.NavigateUri = [System.Uri]::new($rawImgUrl)
+                    $hl.Inlines.Add([System.Windows.Documents.Run]::new("🖼️ $dispImgLabel"))
+                    $hl.Foreground = Get-CachedBrush "#4FC1FF"
+                    $hl.TextDecorations = [System.Windows.TextDecorations]::Underline
+                    $hl.ToolTip = $rawImgUrl
+                    $hl.Cursor = [System.Windows.Input.Cursors]::Hand
+                    $hl.Add_RequestNavigate({
+                        param($s, $e)
+                        try {
+                            if ($e.Uri.AbsoluteUri -notmatch '\.exe($|\?)') {
+                                Start-Process $e.Uri.AbsoluteUri
+                            }
+                        } catch {}
+                    })
+                    $runs.Add($hl)
+                } catch {
+                    $run = [System.Windows.Documents.Run]::new("🖼️ $dispImgLabel")
+                    $run.Foreground = Get-CachedBrush "#E2C08D"
+                    $runs.Add($run)
+                }
+            } else {
+                if ($null -ne $CollectedImages -and (Test-IsImageFilePath -Path $rawImgUrl)) {
+                    $CollectedImages.Add([pscustomobject]@{
+                        Path          = $null
+                        Caption       = $imgAlt
+                        RawUrl        = $rawImgUrl
+                        IsImageSyntax = $true
+                    })
+                }
+                $run = [System.Windows.Documents.Run]::new("🖼️ $dispImgLabel")
+                $run.Foreground = Get-CachedBrush "#E2C08D"
+                $runs.Add($run)
+            }
+        }
+        elseif ($m.Groups["link"].Success) {
             $linkText = $m.Groups["linktext"].Value
-            $linkUrl = $m.Groups["linkurl"].Value
-            if ($linkUrl -notmatch '\.exe($|\?)' -and ($linkUrl -match '^https?://' -or $linkUrl -match '^file://')) {
+            $linkUrl = if ($m.Groups["linkurl_angle"].Success) {
+                $m.Groups["linkurl_angle"].Value.Trim()
+            } elseif ($m.Groups["linkimgurl"].Success) {
+                $m.Groups["linkimgurl"].Value.Trim()
+            } else {
+                $m.Groups["linkurl"].Value
+            }
+            $resolvedLinkImg = Resolve-ChatImageFilePath -RawTarget $linkUrl -Workspace $Workspace -ConversationId $ConversationId
+            if ($resolvedLinkImg) {
+                if ($null -ne $CollectedImages) {
+                    $CollectedImages.Add([pscustomobject]@{
+                        Path          = $resolvedLinkImg
+                        Caption       = $linkText
+                        RawUrl        = $linkUrl
+                        IsImageSyntax = $false
+                    })
+                }
+                $runs.Add((New-ChatImageHyperlink -LinkText $linkText -ImagePath $resolvedLinkImg -DisplayTitle $linkText))
+            } elseif ($linkUrl -notmatch '\.exe($|\?)' -and ($linkUrl -match '^https?://' -or $linkUrl -match '^file://')) {
                 try {
                     $hl = [System.Windows.Documents.Hyperlink]::new()
                     $hl.NavigateUri = [System.Uri]::new($linkUrl)
@@ -3053,7 +3435,7 @@ function Parse-InlineMarkdownRuns {
         elseif ($m.Groups["bold"].Success) {
             $content = $val.Substring(2, $val.Length - 4)
             # Внутри жирного может быть ссылка или код: разбираем содержимое ещё раз
-            foreach ($inner in (Parse-InlineMarkdownRuns -LineText $content -BaseColor "#FFFFFF" -FontSize $FontSize)) {
+            foreach ($inner in (Parse-InlineMarkdownRuns -LineText $content -BaseColor "#FFFFFF" -FontSize $FontSize -Workspace $Workspace -ConversationId $ConversationId -CollectedImages $CollectedImages)) {
                 $inner.FontWeight = [System.Windows.FontWeights]::Bold
                 $runs.Add($inner)
             }
@@ -3093,6 +3475,315 @@ function Parse-InlineMarkdownRuns {
     return $runs
 }
 
+function New-ChatImageCard {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [string]$Caption = "",
+        [double]$FontSize = 13.0,
+        [double]$LeftMargin = 0.0
+    )
+    $fileName = [System.IO.Path]::GetFileName($FilePath)
+    $dispCaption = if (-not [string]::IsNullOrWhiteSpace($Caption) -and $Caption.Trim() -ne $fileName) { $Caption.Trim() } else { $fileName }
+    $fileInfo = Get-Item -LiteralPath $FilePath -ErrorAction SilentlyContinue
+    $sizeStr = if ($fileInfo) {
+        if ($fileInfo.Length -ge 1048576) { "$([math]::Round($fileInfo.Length / 1048576.0, 1)) MB" }
+        else { "$([math]::Max(1, [math]::Round($fileInfo.Length / 1024.0))) KB" }
+    } else { "" }
+
+    $imgData = Load-BitmapImageFromFile -FilePath $FilePath -MaxDecodeWidth 920
+
+    $cardBorder = [System.Windows.Controls.Border]::new()
+    $cardBorder.Background = Get-CachedBrush "#1B2028"
+    $cardBorder.BorderBrush = Get-CachedBrush "#30363D"
+    $cardBorder.BorderThickness = [System.Windows.Thickness]::new(1)
+    $cardBorder.CornerRadius = (New-ThemeCorner 6)
+    $cardBorder.Padding = [System.Windows.Thickness]::new(8)
+    $cardBorder.Margin = [System.Windows.Thickness]::new($LeftMargin, 6, 0, 8)
+    $cardBorder.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
+
+    $outerStack = [System.Windows.Controls.StackPanel]::new()
+
+    $clickTag = [pscustomobject]@{
+        Path    = $FilePath
+        Caption = $dispCaption
+    }
+
+    $imgWrap = [System.Windows.Controls.Border]::new()
+    $imgWrap.Background = Get-CachedBrush "#0D1117"
+    $imgWrap.CornerRadius = (New-ThemeCorner 4)
+    $imgWrap.ClipToBounds = $true
+    $imgWrap.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Stretch
+    $imgWrap.Cursor = [System.Windows.Input.Cursors]::Hand
+    $imgWrap.ToolTip = "Нажмите для просмотра и разметки маркерами`r`n$FilePath"
+    $imgWrap.Tag = $clickTag
+
+    if ($imgData -and $imgData.ImageSource) {
+        $imgCtrl = [System.Windows.Controls.Image]::new()
+        $imgCtrl.Source = $imgData.ImageSource
+        $imgCtrl.Stretch = [System.Windows.Media.Stretch]::Uniform
+        $imgCtrl.StretchDirection = [System.Windows.Controls.StretchDirection]::DownOnly
+        $imgCtrl.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+        $imgCtrl.MaxWidth = 440
+        $imgCtrl.MaxHeight = 240
+        [System.Windows.Media.RenderOptions]::SetBitmapScalingMode($imgCtrl, [System.Windows.Media.BitmapScalingMode]::HighQuality)
+        $imgWrap.Child = $imgCtrl
+        $metaText = if ($sizeStr) { "$($imgData.Width)×$($imgData.Height) px • $sizeStr • $fileName" } else { "$($imgData.Width)×$($imgData.Height) px • $fileName" }
+    } else {
+        $fallbackTb = [System.Windows.Controls.TextBlock]::new()
+        $fallbackTb.Text = "🖼️ Предпросмотр недоступен (нажмите для открытия): $fileName"
+        $fallbackTb.Foreground = Get-CachedBrush "#E2C08D"
+        $fallbackTb.FontSize = [math]::Max(11.0, $FontSize - 1.0)
+        $fallbackTb.Margin = [System.Windows.Thickness]::new(10, 8, 10, 8)
+        $imgWrap.Child = $fallbackTb
+        $metaText = if ($sizeStr) { "$sizeStr • $fileName" } else { $fileName }
+    }
+
+    $imgWrap.Add_PreviewMouseLeftButtonDown({
+        param($s, $e)
+        $e.Handled = $true
+        if ($s.Tag -and $s.Tag.Path) {
+            Show-ImageViewerWindow -FilePath $s.Tag.Path -Title $s.Tag.Caption
+        }
+    })
+    [void]$outerStack.Children.Add($imgWrap)
+
+    $footerDock = [System.Windows.Controls.DockPanel]::new()
+    $footerDock.Margin = [System.Windows.Thickness]::new(0, 6, 0, 0)
+    $footerDock.LastChildFill = $true
+
+    $btnPanel = [System.Windows.Controls.StackPanel]::new()
+    $btnPanel.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+    $btnPanel.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $btnPanel.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+    [System.Windows.Controls.DockPanel]::SetDock($btnPanel, [System.Windows.Controls.Dock]::Right)
+
+    $btnOpen = [System.Windows.Controls.Button]::new()
+    $btnOpen.Content = "✏️ Разметка"
+    $btnOpen.ToolTip = "Открыть изображение для просмотра, зума и разметки маркерами"
+    $btnOpen.Background = Get-CachedBrush "#262C36" metal
+    $btnOpen.BorderBrush = Get-CachedBrush "#3B4452" metal
+    $btnOpen.Foreground = Get-CachedBrush "#E6EDF3" metal
+    $btnOpen.BorderThickness = [System.Windows.Thickness]::new(1)
+    $btnOpen.FontSize = 11.0
+    $btnOpen.Padding = [System.Windows.Thickness]::new(8, 3, 8, 3)
+    $btnOpen.Margin = [System.Windows.Thickness]::new(0, 0, 5, 0)
+    $btnOpen.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnOpen.Tag = $clickTag
+    $btnOpen.Add_Click({
+        param($s, $e)
+        $e.Handled = $true
+        if ($s.Tag -and $s.Tag.Path) {
+            Show-ImageViewerWindow -FilePath $s.Tag.Path -Title $s.Tag.Caption
+        }
+    })
+    [void]$btnPanel.Children.Add($btnOpen)
+
+    $btnAttach = [System.Windows.Controls.Button]::new()
+    $btnAttach.Content = "📎 Прикрепить"
+    $btnAttach.ToolTip = "Прикрепить изображение к следующему сообщению"
+    $btnAttach.Background = Get-CachedBrush "#1F4B85" metal
+    $btnAttach.BorderBrush = Get-CachedBrush "#388BFD" metal
+    $btnAttach.Foreground = [System.Windows.Media.Brushes]::White
+    $btnAttach.BorderThickness = [System.Windows.Thickness]::new(1)
+    $btnAttach.FontSize = 11.0
+    $btnAttach.Padding = [System.Windows.Thickness]::new(8, 3, 8, 3)
+    $btnAttach.Cursor = [System.Windows.Input.Cursors]::Hand
+    $btnAttach.Tag = [pscustomobject]@{ Path = $FilePath; Btn = $btnAttach }
+    $btnAttach.Add_Click({
+        param($s, $e)
+        $e.Handled = $true
+        $info = $s.Tag
+        if ($info -and $info.Path) {
+            Add-AttachedItem -Path $info.Path
+            if ($txtPromptInput -and $window -and $window.IsVisible) {
+                try { $txtPromptInput.Focus() | Out-Null } catch {}
+            }
+            $btnRef = $info.Btn
+            $btnRef.Content = "✅ Прикреплено"
+            $btnRef.Background = Get-CachedBrush "#238636" metal
+            $btnRef.BorderBrush = Get-CachedBrush "#2EA043" metal
+            $tReset = [System.Windows.Threading.DispatcherTimer]::new()
+            $tReset.Interval = [TimeSpan]::FromMilliseconds(1800)
+            $tReset.Add_Tick({
+                $btnRef.Content = "📎 Прикрепить"
+                $btnRef.Background = Get-CachedBrush "#1F4B85" metal
+                $btnRef.BorderBrush = Get-CachedBrush "#388BFD" metal
+                $tReset.Stop()
+            }.GetNewClosure())
+            $tReset.Start()
+        }
+    })
+    [void]$btnPanel.Children.Add($btnAttach)
+
+    [void]$footerDock.Children.Add($btnPanel)
+
+    $infoStack = [System.Windows.Controls.StackPanel]::new()
+    $infoStack.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $infoStack.Cursor = [System.Windows.Input.Cursors]::Hand
+    $infoStack.ToolTip = "Нажмите для просмотра изображения`r`n$FilePath"
+    $infoStack.Tag = $clickTag
+    $infoStack.Add_PreviewMouseLeftButtonDown({
+        param($s, $e)
+        $e.Handled = $true
+        if ($s.Tag -and $s.Tag.Path) {
+            Show-ImageViewerWindow -FilePath $s.Tag.Path -Title $s.Tag.Caption
+        }
+    })
+
+    $lblCap = [System.Windows.Controls.TextBlock]::new()
+    $lblCap.Text = $dispCaption
+    $lblCap.FontWeight = [System.Windows.FontWeights]::SemiBold
+    $lblCap.FontSize = [math]::Max(11.0, $FontSize - 1.0)
+    $lblCap.Foreground = Get-CachedBrush "#E6EDF3"
+    $lblCap.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    $lblCap.MaxWidth = 250
+    [void]$infoStack.Children.Add($lblCap)
+
+    $lblMeta = [System.Windows.Controls.TextBlock]::new()
+    $lblMeta.Text = $metaText
+    $lblMeta.FontSize = 10.0
+    $lblMeta.Foreground = Get-CachedBrush "#8B949E"
+    $lblMeta.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    $lblMeta.MaxWidth = 250
+    [void]$infoStack.Children.Add($lblMeta)
+
+    [void]$footerDock.Children.Add($infoStack)
+    [void]$outerStack.Children.Add($footerDock)
+
+    $cardBorder.Child = $outerStack
+    $cardBorder.Add_MouseEnter({
+        param($s, $e)
+        $s.BorderBrush = Get-CachedBrush "#58A6FF"
+    })
+    $cardBorder.Add_MouseLeave({
+        param($s, $e)
+        $s.BorderBrush = Get-CachedBrush "#30363D"
+    })
+
+    $ctxMenu = [System.Windows.Controls.ContextMenu]::new()
+    $miView = [System.Windows.Controls.MenuItem]::new()
+    $miView.Header = "✏️ Просмотр и разметка маркерами"
+    $miView.Tag = $clickTag
+    $miView.Add_Click({
+        param($s, $e)
+        if ($s.Tag -and $s.Tag.Path) { Show-ImageViewerWindow -FilePath $s.Tag.Path -Title $s.Tag.Caption }
+    })
+    [void]$ctxMenu.Items.Add($miView)
+
+    $miAttach = [System.Windows.Controls.MenuItem]::new()
+    $miAttach.Header = "📎 Прикрепить к сообщению"
+    $miAttach.Tag = $FilePath
+    $miAttach.Add_Click({
+        param($s, $e)
+        if ($s.Tag) { Add-AttachedItem -Path ([string]$s.Tag) }
+    })
+    [void]$ctxMenu.Items.Add($miAttach)
+
+    $miCopyImg = [System.Windows.Controls.MenuItem]::new()
+    $miCopyImg.Header = "📋 Копировать картинку"
+    $miCopyImg.Tag = $FilePath
+    $miCopyImg.Add_Click({
+        param($s, $e)
+        if ($s.Tag) {
+            $fullImg = Load-BitmapImageFromFile -FilePath ([string]$s.Tag)
+            if ($fullImg -and $fullImg.ImageSource) {
+                try { [System.Windows.Clipboard]::SetImage($fullImg.ImageSource) } catch {}
+            }
+        }
+    })
+    [void]$ctxMenu.Items.Add($miCopyImg)
+
+    $miCopyPath = [System.Windows.Controls.MenuItem]::new()
+    $miCopyPath.Header = "📋 Копировать путь к файлу"
+    $miCopyPath.Tag = $FilePath
+    $miCopyPath.Add_Click({
+        param($s, $e)
+        if ($s.Tag) { try { [System.Windows.Clipboard]::SetText([string]$s.Tag) } catch {} }
+    })
+    [void]$ctxMenu.Items.Add($miCopyPath)
+
+    $miSys = [System.Windows.Controls.MenuItem]::new()
+    $miSys.Header = "🖼️ Открыть в системе"
+    $miSys.Tag = $FilePath
+    $miSys.Add_Click({
+        param($s, $e)
+        if ($s.Tag) {
+            try {
+                $psi = [System.Diagnostics.ProcessStartInfo]::new([string]$s.Tag)
+                $psi.UseShellExecute = $true
+                [System.Diagnostics.Process]::Start($psi) | Out-Null
+            } catch {}
+        }
+    })
+    [void]$ctxMenu.Items.Add($miSys)
+
+    $miFolder = [System.Windows.Controls.MenuItem]::new()
+    $miFolder.Header = "📁 Показать в папке (Проводник)"
+    $miFolder.Tag = $FilePath
+    $miFolder.Add_Click({
+        param($s, $e)
+        if ($s.Tag) { try { [System.Diagnostics.Process]::Start("explorer.exe", "/select,`"$($s.Tag)`"") | Out-Null } catch {} }
+    })
+    [void]$ctxMenu.Items.Add($miFolder)
+
+    $cardBorder.ContextMenu = $ctxMenu
+    return $cardBorder
+}
+
+function New-MissingChatImageCard {
+    param(
+        [string]$Caption = "",
+        [string]$RawUrl = "",
+        [double]$FontSize = 13.0,
+        [double]$LeftMargin = 0.0
+    )
+    $label = if (-not [string]::IsNullOrWhiteSpace($Caption)) { $Caption.Trim() } else { "Изображение" }
+    $border = [System.Windows.Controls.Border]::new()
+    $border.Background = Get-CachedBrush "#1B2028"
+    $border.BorderBrush = Get-CachedBrush "#3E3E42"
+    $border.BorderThickness = [System.Windows.Thickness]::new(1)
+    $border.CornerRadius = (New-ThemeCorner 5)
+    $border.Padding = [System.Windows.Thickness]::new(8, 5, 8, 5)
+    $border.Margin = [System.Windows.Thickness]::new($LeftMargin, 4, 0, 6)
+    $border.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
+
+    $tb = [System.Windows.Controls.TextBlock]::new()
+    $tb.Text = "🖼️ $label — файл не найден ($RawUrl)"
+    $tb.Foreground = Get-CachedBrush "#E2C08D"
+    $tb.FontSize = [math]::Max(11.0, $FontSize - 1.0)
+    $tb.TextWrapping = [System.Windows.TextWrapping]::Wrap
+    $border.Child = $tb
+    return $border
+}
+
+function Add-ChatImageCards {
+    param(
+        $Images,
+        $Document,
+        [double]$FontSize = 13.0,
+        [double]$LeftMargin = 0.0
+    )
+    if (-not $Images -or -not $Document) { return }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($img in $Images) {
+        if (-not $img) { continue }
+        if ($img.Path) {
+            if (-not $seen.Add($img.Path)) { continue }
+            $card = New-ChatImageCard -FilePath $img.Path -Caption $img.Caption -FontSize $FontSize -LeftMargin $LeftMargin
+            if ($card) {
+                $Document.Blocks.Add([System.Windows.Documents.BlockUIContainer]::new($card))
+            }
+        } elseif ($img.IsImageSyntax) {
+            $missKey = "missing|" + $img.RawUrl
+            if (-not $seen.Add($missKey)) { continue }
+            $missCard = New-MissingChatImageCard -Caption $img.Caption -RawUrl $img.RawUrl -FontSize $FontSize -LeftMargin $LeftMargin
+            if ($missCard) {
+                $Document.Blocks.Add([System.Windows.Documents.BlockUIContainer]::new($missCard))
+            }
+        }
+    }
+}
+
 function Append-MarkdownFormatted {
     param(
         [Parameter(Mandatory=$true)][string]$Text,
@@ -3106,6 +3797,12 @@ function Append-MarkdownFormatted {
 
     $effFontSize = if ($FontSize -and $FontSize -gt 0) { [double]$FontSize } elseif ($global:CurrentFontSize -and $global:CurrentFontSize -gt 0) { [double]$global:CurrentFontSize } else { 13.0 }
     $calcLineHeight = [math]::Round([math]::Max(20.0, $effFontSize * 1.55))
+
+    $tabCtx = Get-DocumentTabContext -Document $doc
+    $effWorkspace = $tabCtx.Workspace
+    $effConvId = $tabCtx.ConversationId
+    $singleImgRegex = '!\[(?<imgalt>[^\]\r\n]*)\]\((?:<(?<imgurl_angle>[^>\r\n]+)>|(?<imgurl>(?:[^()\r\n]|\([^()\r\n]*\))+?))(?:\s+"[^"\r\n]*")?\)'
+    $standaloneImgLineRegex = "^\s*(?:$singleImgRegex\s*)+$"
 
     $lines = $Text -split "\r?\n"
     $i = 0
@@ -3239,6 +3936,7 @@ function Append-MarkdownFormatted {
                     $grid.ColumnDefinitions.Add($cd)
                 }
 
+                $tableImages = [System.Collections.Generic.List[psobject]]::new()
                 $isHeader = $true
                 $gridRow = 0
                 for ($r = 0; $r -lt $rows.Count; $r++) {
@@ -3279,7 +3977,7 @@ function Append-MarkdownFormatted {
                         $tb.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
 
                         $cellColor = if ($isHeader) { "#4EC9B0" } else { "#D4D4D4" }
-                        $cellInlines = Parse-InlineMarkdownRuns -LineText $cellText -BaseColor $cellColor -FontSize $effFontSize
+                        $cellInlines = Parse-InlineMarkdownRuns -LineText $cellText -BaseColor $cellColor -FontSize $effFontSize -Workspace $effWorkspace -ConversationId $effConvId -CollectedImages $tableImages
                         foreach ($cinl in $cellInlines) {
                             if ($isHeader) { $cinl.FontWeight = [System.Windows.FontWeights]::Bold }
                             $tb.Inlines.Add($cinl)
@@ -3295,6 +3993,9 @@ function Append-MarkdownFormatted {
                 $tblBorder.Child = $grid
                 $container = [System.Windows.Documents.BlockUIContainer]::new($tblBorder)
                 $doc.Blocks.Add($container)
+                if ($tableImages.Count -gt 0) {
+                    Add-ChatImageCards -Images $tableImages -Document $doc -FontSize $effFontSize -LeftMargin 0.0
+                }
             }
             continue
         }
@@ -3330,7 +4031,7 @@ function Append-MarkdownFormatted {
             $p.LineHeight = [math]::Round($hSize * 1.35)
             $p.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
 
-            $inlines = Parse-InlineMarkdownRuns -LineText $headerText -BaseColor $hColor -FontSize $hSize
+            $inlines = Parse-InlineMarkdownRuns -LineText $headerText -BaseColor $hColor -FontSize $hSize -Workspace $effWorkspace -ConversationId $effConvId
             foreach ($inl in $inlines) {
                 $inl.FontWeight = [System.Windows.FontWeights]::Bold
                 $p.Inlines.Add($inl)
@@ -3361,14 +4062,18 @@ function Append-MarkdownFormatted {
             $tb.LineHeight = $calcLineHeight
             $tb.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
 
+            $quoteImages = [System.Collections.Generic.List[psobject]]::new()
             for ($ql = 0; $ql -lt $quoteLines.Count; $ql++) {
                 if ($ql -gt 0) { $tb.Inlines.Add([System.Windows.Documents.LineBreak]::new()) }
-                $inlines = Parse-InlineMarkdownRuns -LineText $quoteLines[$ql] -BaseColor "#A0A0A0" -FontSize $effFontSize
+                $inlines = Parse-InlineMarkdownRuns -LineText $quoteLines[$ql] -BaseColor "#A0A0A0" -FontSize $effFontSize -Workspace $effWorkspace -ConversationId $effConvId -CollectedImages $quoteImages
                 foreach ($inl in $inlines) { $tb.Inlines.Add($inl) }
             }
             $border.Child = $tb
             $container = [System.Windows.Documents.BlockUIContainer]::new($border)
             $doc.Blocks.Add($container)
+            if ($quoteImages.Count -gt 0) {
+                Add-ChatImageCards -Images $quoteImages -Document $doc -FontSize $effFontSize -LeftMargin 12.0
+            }
             continue
         }
 
@@ -3376,10 +4081,11 @@ function Append-MarkdownFormatted {
         if ($line -match '^(\s*)([-*+])\s+(.*)$') {
             $indentSpaces = $matches[1].Length
             $itemText = $matches[3]
+            $itemLeft = 16.0 + ($indentSpaces * 4.0)
             $p = [System.Windows.Documents.Paragraph]::new()
             $p.LineHeight = $calcLineHeight
             $p.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
-            $p.Margin = [System.Windows.Thickness]::new(16 + ($indentSpaces * 4), 2, 0, 3)
+            $p.Margin = [System.Windows.Thickness]::new($itemLeft, 2, 0, 3)
 
             $bulletChar = if ($indentSpaces -gt 0) { "○ " } else { "• " }
             $bulletRun = [System.Windows.Documents.Run]::new($bulletChar)
@@ -3387,9 +4093,13 @@ function Append-MarkdownFormatted {
             $bulletRun.FontWeight = [System.Windows.FontWeights]::Bold
             $p.Inlines.Add($bulletRun)
 
-            $inlines = Parse-InlineMarkdownRuns -LineText $itemText -BaseColor $BaseColor -FontSize $effFontSize
+            $itemImages = [System.Collections.Generic.List[psobject]]::new()
+            $inlines = Parse-InlineMarkdownRuns -LineText $itemText -BaseColor $BaseColor -FontSize $effFontSize -Workspace $effWorkspace -ConversationId $effConvId -CollectedImages $itemImages
             foreach ($inl in $inlines) { $p.Inlines.Add($inl) }
             $doc.Blocks.Add($p)
+            if ($itemImages.Count -gt 0) {
+                Add-ChatImageCards -Images $itemImages -Document $doc -FontSize $effFontSize -LeftMargin $itemLeft
+            }
             $i++
             continue
         }
@@ -3399,25 +4109,64 @@ function Append-MarkdownFormatted {
             $indentSpaces = $matches[1].Length
             $num = $matches[2]
             $itemText = $matches[3]
+            $itemLeft = 16.0 + ($indentSpaces * 4.0)
             $p = [System.Windows.Documents.Paragraph]::new()
             $p.LineHeight = $calcLineHeight
             $p.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
-            $p.Margin = [System.Windows.Thickness]::new(16 + ($indentSpaces * 4), 2, 0, 3)
+            $p.Margin = [System.Windows.Thickness]::new($itemLeft, 2, 0, 3)
 
             $numRun = [System.Windows.Documents.Run]::new("$num. ")
             $numRun.Foreground = Get-CachedBrush "#569CD6"
             $numRun.FontWeight = [System.Windows.FontWeights]::SemiBold
             $p.Inlines.Add($numRun)
 
-            $inlines = Parse-InlineMarkdownRuns -LineText $itemText -BaseColor $BaseColor -FontSize $effFontSize
+            $itemImages = [System.Collections.Generic.List[psobject]]::new()
+            $inlines = Parse-InlineMarkdownRuns -LineText $itemText -BaseColor $BaseColor -FontSize $effFontSize -Workspace $effWorkspace -ConversationId $effConvId -CollectedImages $itemImages
             foreach ($inl in $inlines) { $p.Inlines.Add($inl) }
             $doc.Blocks.Add($p)
+            if ($itemImages.Count -gt 0) {
+                Add-ChatImageCards -Images $itemImages -Document $doc -FontSize $effFontSize -LeftMargin $itemLeft
+            }
             $i++
             continue
         }
 
         # 8. Пустая строка: разделитель абзацев
         if ([string]::IsNullOrWhiteSpace($line)) {
+            $i++
+            continue
+        }
+
+        # 8.5. Отдельная строка с картинкой (или несколькими картинками): ![alt](path)
+        if ($line -match $standaloneImgLineRegex) {
+            $imgMatches = [regex]::Matches($line, $singleImgRegex)
+            $lineImages = [System.Collections.Generic.List[psobject]]::new()
+            $externalWebLinks = [System.Collections.Generic.List[psobject]]::new()
+            foreach ($im in $imgMatches) {
+                $alt = $im.Groups["imgalt"].Value.Trim()
+                $rawUrl = if ($im.Groups["imgurl_angle"].Success) { $im.Groups["imgurl_angle"].Value.Trim() } else { $im.Groups["imgurl"].Value.Trim() }
+                $resPath = Resolve-ChatImageFilePath -RawTarget $rawUrl -Workspace $effWorkspace -ConversationId $effConvId
+                if ($resPath) {
+                    $lineImages.Add([pscustomobject]@{ Path = $resPath; Caption = $alt; RawUrl = $rawUrl; IsImageSyntax = $true })
+                } elseif ($rawUrl -match '^https?://') {
+                    $externalWebLinks.Add([pscustomobject]@{ Alt = $alt; Url = $rawUrl })
+                } else {
+                    $lineImages.Add([pscustomobject]@{ Path = $null; Caption = $alt; RawUrl = $rawUrl; IsImageSyntax = $true })
+                }
+            }
+            if ($lineImages.Count -gt 0) {
+                Add-ChatImageCards -Images $lineImages -Document $doc -FontSize $effFontSize -LeftMargin 0.0
+            }
+            foreach ($ext in $externalWebLinks) {
+                $pExt = [System.Windows.Documents.Paragraph]::new()
+                $pExt.LineHeight = $calcLineHeight
+                $pExt.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
+                $pExt.Margin = [System.Windows.Thickness]::new(0, 2, 0, 5)
+                $extLabel = if ($ext.Alt) { $ext.Alt } else { $ext.Url }
+                $extInl = Parse-InlineMarkdownRuns -LineText "![$extLabel]($($ext.Url))" -BaseColor $BaseColor -FontSize $effFontSize -Workspace $effWorkspace -ConversationId $effConvId
+                foreach ($inl in $extInl) { $pExt.Inlines.Add($inl) }
+                $doc.Blocks.Add($pExt)
+            }
             $i++
             continue
         }
@@ -3432,7 +4181,8 @@ function Append-MarkdownFormatted {
                 $cur -match '^(---|___|\*\*\*)\s*$' -or 
                 $cur -match '^#{1,6}\s+' -or 
                 $cur -match '^>\s?' -or 
-                $cur -match '^(\s*)([-*+]|\d+\.)\s+') {
+                $cur -match '^(\s*)([-*+]|\d+\.)\s+' -or
+                $cur -match $standaloneImgLineRegex) {
                 break
             }
             $paraLines.Add($cur)
@@ -3444,12 +4194,16 @@ function Append-MarkdownFormatted {
             $p.LineHeight = $calcLineHeight
             $p.LineStackingStrategy = [System.Windows.LineStackingStrategy]::BlockLineHeight
             $p.Margin = [System.Windows.Thickness]::new(0, 3, 0, 7)
+            $paraImages = [System.Collections.Generic.List[psobject]]::new()
             for ($pl = 0; $pl -lt $paraLines.Count; $pl++) {
                 if ($pl -gt 0) { $p.Inlines.Add([System.Windows.Documents.LineBreak]::new()) }
-                $inlines = Parse-InlineMarkdownRuns -LineText $paraLines[$pl] -BaseColor $BaseColor -FontSize $effFontSize
+                $inlines = Parse-InlineMarkdownRuns -LineText $paraLines[$pl] -BaseColor $BaseColor -FontSize $effFontSize -Workspace $effWorkspace -ConversationId $effConvId -CollectedImages $paraImages
                 foreach ($inl in $inlines) { $p.Inlines.Add($inl) }
             }
             $doc.Blocks.Add($p)
+            if ($paraImages.Count -gt 0) {
+                Add-ChatImageCards -Images $paraImages -Document $doc -FontSize $effFontSize -LeftMargin 0.0
+            }
         }
     }
     } catch {
