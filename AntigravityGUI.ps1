@@ -6674,7 +6674,7 @@ function Append-ResponseTime($Seconds, $Document) {
     } else {
         "${Seconds} сек"
     }
-    Append-ChatFormatted -Text "`r`n⏱️ Время ответа: $realTimeStr`r`n`r`n" -Color "#888888" -Document $Document
+    Append-ChatFormatted -Text "⏱️ Время ответа: $realTimeStr`r`n" -Color "#888888" -Document $Document
 }
 
 function Format-Claude5hText($cld) {
@@ -9655,7 +9655,7 @@ $uiTimer.Add_Tick({
                             [void](New-SystemMessageCard -Summary $smsg.Summary -Body $smsg.Body -StartCollapsed -Document $t.Document)
                         }
                     } else {
-                        Append-ChatFormatted -Text "`r`n[ИНФО] $($item.Text)`r`n" -Color "#6A9955" -Document $t.Document
+                        Append-ChatFormatted -Text "[ИНФО] $($item.Text)`r`n" -Color "#6A9955" -Document $t.Document
                     }
                     if ($t -eq $global:ActiveTab) { Scroll-ChatLogToEnd }
                 }
